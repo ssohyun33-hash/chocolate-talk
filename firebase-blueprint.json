@@ -1,0 +1,96 @@
+{
+  "entities": {
+    "user": {
+      "title": "User Profile",
+      "description": "User profile with unchangeable unique custom ID",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "uniqueId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "uniqueId", "createdAt"]
+    },
+    "friend": {
+      "title": "Friend relationship",
+      "description": "Subcollection under users to store persistent friends",
+      "type": "object",
+      "properties": {
+        "friendId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "uniqueId": { "type": "string" },
+        "addedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["friendId", "displayName", "uniqueId", "addedAt"]
+    },
+    "chat": {
+      "title": "Chat Group or Direct Chat",
+      "description": "Meta document for a conversation thread",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "isGroup": { "type": "boolean" },
+        "hostId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastMessageText": { "type": "string" },
+        "lastMessageTime": { "type": "string" }
+      },
+      "required": ["id", "isGroup", "hostId", "createdAt"]
+    },
+    "member": {
+      "title": "Chat Member",
+      "description": "Participant in a specific chat thread",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string" },
+        "joinedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "displayName", "role", "joinedAt"]
+    },
+    "message": {
+      "title": "Message Item",
+      "description": "Individual chat message containing text and/or photos",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderPhoto": { "type": "string" },
+        "text": { "type": "string" },
+        "photoUrl": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "readBy": { "type": "array" }
+      },
+      "required": ["id", "senderId", "senderName", "text", "createdAt", "readBy"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "user",
+      "description": "Registered user profile information"
+    },
+    "users/{userId}/friends/{friendId}": {
+      "schema": "friend",
+      "description": "List of friends added by a user"
+    },
+    "chats/{chatId}": {
+      "schema": "chat",
+      "description": "Chat conversations metadata"
+    },
+    "chats/{chatId}/members/{memberId}": {
+      "schema": "member",
+      "description": "Participants in the specified chat"
+    },
+    "chats/{chatId}/messages/{messageId}": {
+      "schema": "message",
+      "description": "Messages inside a specific chat"
+    }
+  }
+}

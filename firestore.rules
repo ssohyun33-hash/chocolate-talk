@@ -1,0 +1,197 @@
+rules_version = '2';
+service cloudfirestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net: Default-Deny Catch-All
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Helper Functions ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Helper to extract incoming and existing database data safely
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Check if ID is structured properly to prevent Resource Poisoning or Wallet Drain
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Check if user is a member of the requested chat
+    function isMemberOfChat(chatId) {
+      return exists(/databases/$(database)/documents/chats/$(chatId)/members/$(request.auth.uid));
+    }
+
+    // Check if user is the host of the requested chat
+    function isHostOfChat(chatId) {
+      return get(/databases/$(database)/documents/chats/$(chatId)).data.hostId == request.auth.uid;
+    }
+
+    // Check if user is the system admin
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'jaein8080@gmail.com'
+        || request.auth.uid == 'jaein8080@gmail.com'
+        || request.auth.uid == 'jaein8080'
+        || request.auth.token.email == 'admin@chocolatetalk.local'
+      );
+    }
+
+    // --- Users Collection ---
+    match /users/{userId} {
+      allow get, list: if isSignedIn() || isAdmin();
+
+      allow create: if (isSignedIn() && userId == request.auth.uid) || isAdmin();
+
+      allow update: if (isSignedIn() && userId == request.auth.uid) || isAdmin();
+
+      allow delete: if isAdmin();
+
+      // Friends Subcollection: Saved persistently per user
+      match /friends/{friendId} {
+        allow read: if (isSignedIn() && userId == request.auth.uid) || isAdmin();
+        
+        allow create: if isSignedIn() 
+          && userId == request.auth.uid
+          && isValidId(friendId)
+          && incoming().friendId == friendId
+          && incoming().displayName is string && incoming().displayName.size() <= 100
+          && incoming().uniqueId is string && incoming().uniqueId.size() == 8
+          && incoming().addedAt == request.time;
+
+        allow update: if false; // Friend records are read-only except for creation/deletion
+        allow delete: if (isSignedIn() && userId == request.auth.uid) || isAdmin();
+      }
+
+      // Joined Chats Subcollection: Tracking chats the user belongs to persistently
+      match /joinedChats/{joinedChatId} {
+        allow read, list: if (isSignedIn() && userId == request.auth.uid) || isAdmin();
+        
+        allow create, update: if isSignedIn() 
+          && userId == request.auth.uid
+          && isValidId(joinedChatId)
+          && incoming().chatId == joinedChatId
+          && incoming().isGroup is bool
+          && incoming().joinedAt == request.time;
+
+        allow delete: if (isSignedIn() && userId == request.auth.uid) || isAdmin();
+      }
+    }
+
+    // --- Chats Collection ---
+    match /chats/{chatId} {
+      // Any authenticated user can read or list chats they belong to
+      allow get: if (isSignedIn() && (isMemberOfChat(chatId) || existing().hostId == request.auth.uid)) || isAdmin();
+      allow list: if isSignedIn();
+
+      allow create: if isSignedIn()
+        && isValidId(chatId)
+        && incoming().id == chatId
+        && incoming().hostId == request.auth.uid
+        && incoming().isGroup is bool
+        && incoming().createdAt == request.time;
+
+      allow update: if isSignedIn() 
+        && isMemberOfChat(chatId)
+        && incoming().id == existing().id
+        && incoming().isGroup == existing().isGroup
+        && incoming().hostId == existing().hostId
+        && incoming().createdAt == existing().createdAt;
+
+      // Only the host can delete the chat
+      allow delete: if (isSignedIn() && isHostOfChat(chatId)) || isAdmin();
+
+      // Members Subcollection inside a Chat
+      match /members/{memberId} {
+        allow read, list: if (isSignedIn() && isMemberOfChat(chatId)) || isAdmin();
+
+        // Host can add anyone; Invited members can also invite others (as requested)
+        // If the chat was just created, allow the direct setup (hostId of incoming chat is request.auth.uid)
+        allow create: if isSignedIn()
+          && isValidId(memberId)
+          && (
+               isMemberOfChat(chatId) 
+               || request.auth.uid == memberId 
+               || get(/databases/$(database)/documents/chats/$(chatId)).data.hostId == request.auth.uid
+             )
+          && incoming().userId == memberId
+          && incoming().displayName is string && incoming().displayName.size() <= 100
+          && incoming().joinedAt == request.time;
+
+        allow update: if false; // Member status cannot be modified except for recreated joins
+
+        // Kick or Leave rule:
+        // 1. Participant is leaving voluntarily (memberId == request.auth.uid)
+        // 2. Chat Host is kicking a member
+        allow delete: if (isSignedIn() && (
+          memberId == request.auth.uid 
+          || isHostOfChat(chatId)
+        )) || isAdmin();
+      }
+
+      // Messages Subcollection inside a Chat
+      match /messages/{messageId} {
+        allow read, list: if (isSignedIn() && isMemberOfChat(chatId)) || isAdmin();
+
+        allow create: if isSignedIn()
+          && isMemberOfChat(chatId)
+          && isValidId(messageId)
+          && incoming().id == messageId
+          && incoming().senderId == request.auth.uid
+          && incoming().senderName is string && incoming().senderName.size() <= 100
+          && incoming().text is string && incoming().text.size() <= 10000
+          && incoming().createdAt == request.time
+          && incoming().readBy is list
+          && incoming().readBy.size() == 1
+          && incoming().readBy[0] == request.auth.uid;
+
+        // Allow updates solely for appending read receipts or displaying status
+        allow update: if isSignedIn()
+          && isMemberOfChat(chatId)
+          && incoming().id == existing().id
+          && incoming().senderId == existing().senderId
+          && incoming().senderName == existing().senderName
+          && incoming().text == existing().text
+          && incoming().createdAt == existing().createdAt
+          // Only readBy list can grow
+          && incoming().readBy is list;
+
+        allow delete: if false; // Chat histories are permanent
+      }
+    }
+
+    // --- Usernames Collection (Uniqueness claims) ---
+    match /usernames/{username} {
+      allow read: if true;
+      allow create, update: if isSignedIn();
+      allow delete: if isAdmin();
+    }
+
+    // --- Reports Collection ---
+    match /reports/{reportId} {
+      allow create: if isSignedIn();
+      allow read, update, delete: if isAdmin();
+    }
+
+    // --- Bans Collection ---
+    match /bans/{userId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // --- Announcements Collection ---
+    match /announcements/{announcementId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+  }
+}

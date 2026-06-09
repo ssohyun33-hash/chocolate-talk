@@ -1,0 +1,6 @@
+{
+  "name": "Chocolate Talk",
+  "description": "A real-time chat application with unchangeable IDs, camera scan scanning, photo uploads, read receipts, and group chat controls.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
