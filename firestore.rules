@@ -61,14 +61,16 @@ service cloudfirestore {
         allow read: if (isSignedIn() && userId == request.auth.uid) || isAdmin();
         
         allow create: if isSignedIn() 
-          && userId == request.auth.uid
+          && (userId == request.auth.uid || friendId == request.auth.uid)
           && isValidId(friendId)
           && incoming().friendId == friendId
           && incoming().displayName is string && incoming().displayName.size() <= 100
           && incoming().uniqueId is string && incoming().uniqueId.size() == 8
-          && incoming().addedAt == request.time;
+          && (
+            (incoming().addedAt == request.time) || (incoming().createdAt == request.time)
+          );
 
-        allow update: if false; // Friend records are read-only except for creation/deletion
+        allow update: if (isSignedIn() && userId == request.auth.uid) || isAdmin();
         allow delete: if (isSignedIn() && userId == request.auth.uid) || isAdmin();
       }
 
@@ -77,7 +79,7 @@ service cloudfirestore {
         allow read, list: if (isSignedIn() && userId == request.auth.uid) || isAdmin();
         
         allow create, update: if isSignedIn() 
-          && userId == request.auth.uid
+          && (userId == request.auth.uid || exists(/databases/$(database)/documents/chats/$(joinedChatId)/members/$(request.auth.uid)) || joinedChatId.matches('^dm-.*'))
           && isValidId(joinedChatId)
           && incoming().chatId == joinedChatId
           && incoming().isGroup is bool
@@ -89,8 +91,8 @@ service cloudfirestore {
 
     // --- Chats Collection ---
     match /chats/{chatId} {
-      // Any authenticated user can read or list chats they belong to
-      allow get: if (isSignedIn() && (isMemberOfChat(chatId) || existing().hostId == request.auth.uid)) || isAdmin();
+      // Any authenticated user can read or check if a chat exists
+      allow get: if isSignedIn() || isAdmin();
       allow list: if isSignedIn();
 
       allow create: if isSignedIn()

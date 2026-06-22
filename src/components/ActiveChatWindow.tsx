@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { 
   Send, Image, Users, Trash2, LogOut, UserMinus, UserPlus, 
-  Check, CheckCheck, Smile, Settings, X, Plus, BellRing, AlertTriangle, ShieldAlert
+  Check, CheckCheck, Smile, Settings, X, Plus, BellRing, AlertTriangle, ShieldAlert, ArrowLeft, ArrowRight
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
@@ -11,12 +11,24 @@ import {
 import { db, handleFirestoreError, OperationType } from "../firebase";
 import { Chat, ChatMember, ChatMessage, UserProfile, Friend } from "../types";
 
+const ensureEightDigitId = (uid: string, uniqueId?: string) => {
+  const clean = (uniqueId || "").replace(/[^0-9]/g, "");
+  if (clean.length === 8) return clean;
+  let hash = 0;
+  for (let i = 0; i < uid.length; i++) {
+    hash = uid.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return (10000000 + (Math.abs(hash) % 90000000)).toString();
+};
+
 interface ActiveChatWindowProps {
   chatId: string;
   currentProfile: UserProfile;
   friendsList: Friend[];
   onChatDeletedOrLeft: () => void;
   theme?: "white" | "black";
+  sidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
 }
 
 export default function ActiveChatWindow({ 
@@ -24,7 +36,9 @@ export default function ActiveChatWindow({
   currentProfile, 
   friendsList, 
   onChatDeletedOrLeft,
-  theme = "white"
+  theme = "white",
+  sidebarCollapsed = false,
+  onToggleSidebar
 }: ActiveChatWindowProps) {
   const isDark = theme === "black";
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -77,13 +91,16 @@ export default function ActiveChatWindow({
     try {
       const batch = writeBatch(db);
       
+      const targetFriendUniqueId = ensureEightDigitId(otherMember.userId, (otherMember as any).uniqueId);
+      const mySymmetricUniqueId = ensureEightDigitId(currentProfile.uid, currentProfile.uniqueId);
+
       // 1. Add to current user's friends subcollection
       const myFriendDoc = doc(db, "users", currentProfile.uid, "friends", otherMember.userId);
       batch.set(myFriendDoc, {
         friendId: otherMember.userId,
         displayName: otherMember.displayName,
         photoURL: otherMember.photoURL,
-        uniqueId: "", 
+        uniqueId: targetFriendUniqueId, 
         addedAt: serverTimestamp()
       });
 
@@ -93,7 +110,7 @@ export default function ActiveChatWindow({
         friendId: currentProfile.uid,
         displayName: currentProfile.displayName,
         photoURL: currentProfile.photoURL,
-        uniqueId: currentProfile.uniqueId || "",
+        uniqueId: mySymmetricUniqueId,
         addedAt: serverTimestamp()
       });
 
@@ -469,7 +486,24 @@ export default function ActiveChatWindow({
       <div className={`flex h-20 items-center justify-between border-b px-8 transition-colors duration-200 ${
         isDark ? "border-zinc-800 bg-[#0c0c0e]" : "border-[#E8E1D5] bg-white"
       }`}>
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-3 md:space-x-4">
+          <button
+            onClick={() => {
+              if (window.innerWidth >= 768 && onToggleSidebar) {
+                onToggleSidebar();
+              } else {
+                onChatDeletedOrLeft();
+              }
+            }}
+            className="p-1.5 rounded-lg hover:bg-[#F5F1EB] dark:hover:bg-zinc-850 transition text-gray-500 hover:text-[#7B3F00] cursor-pointer inline-flex items-center"
+            title={sidebarCollapsed ? "Show Sidebar" : "Full Screen Chat"}
+          >
+            {sidebarCollapsed ? (
+              <ArrowRight className="h-5 w-5 text-[#7B3F00]" />
+            ) : (
+              <ArrowLeft className="h-5 w-5" />
+            )}
+          </button>
           <div className={`flex h-10 w-10 items-center justify-center rounded-xl font-bold font-sans border ${
             isDark ? "bg-zinc-900 border-zinc-750 text-white" : "bg-[#F5F1EB] border-[#E8E1D5] text-[#7B3F00]"
           }`}>
@@ -519,7 +553,7 @@ export default function ActiveChatWindow({
         </div>
       </div>
 
-      {/* KakaoTalk Unrecognized Sender Banner */}
+      {/* ChocTalk Unrecognized Sender Banner */}
       {otherMember && !isFriend && !isBlocked && (
         <div className={`flex flex-col sm:flex-row items-center justify-between px-6 py-4.5 border-b shadow-xs gap-3 select-none ${
           isDark 
@@ -585,14 +619,25 @@ export default function ActiveChatWindow({
               className={`flex items-start space-x-3 ${isMe ? "justify-end" : "justify-start"}`}
             >
               {!isMe && (
-                <img
-                  src={msg.senderPhoto}
-                  referrerPolicy="no-referrer"
-                  alt={msg.senderName}
-                  className={`h-8 w-8 rounded-lg object-cover border shrink-0 ${
-                    isDark ? "border-zinc-700 bg-zinc-800" : "border-[#E8E1D5] bg-white"
-                  }`}
-                />
+                !friendsList.some((f) => f.friendId === msg.senderId) ? (
+                  <div 
+                    className={`h-8 w-8 rounded-lg flex items-center justify-center font-bold font-sans text-sm border shrink-0 ${
+                      isDark ? "bg-zinc-850 border-zinc-700 text-zinc-400" : "bg-[#FAF6F0] border-[#E8E1D5] text-[#7B3F00]"
+                    }`}
+                    title="Unrecognized User - Showing '?'"
+                  >
+                    ?
+                  </div>
+                ) : (
+                  <img
+                    src={msg.senderPhoto}
+                    referrerPolicy="no-referrer"
+                    alt={msg.senderName}
+                    className={`h-8 w-8 rounded-lg object-cover border shrink-0 ${
+                      isDark ? "border-zinc-700 bg-zinc-800" : "border-[#E8E1D5] bg-white"
+                    }`}
+                  />
+                )
               )}
 
               <div className="max-w-[70%]">
@@ -732,12 +777,21 @@ export default function ActiveChatWindow({
                   {members.map((member) => (
                     <div key={member.userId} className="flex items-center justify-between">
                       <div className="flex items-center space-x-2.5">
-                        <img 
-                          src={member.photoURL} 
-                          referrerPolicy="no-referrer"
-                          className="h-7 w-7 rounded-full object-cover border border-[#E8E1D5] bg-white" 
-                          alt={member.displayName} 
-                        />
+                        {member.userId !== currentProfile.uid && !friendsList.some((f) => f.friendId === member.userId) ? (
+                          <div 
+                            className="h-7 w-7 rounded-full flex items-center justify-center font-bold text-xs border bg-[#FAF6F0] border-[#E8E1D5] text-[#7B3F00] shrink-0"
+                            title="Unrecognized companion (?)"
+                          >
+                            ?
+                          </div>
+                        ) : (
+                          <img 
+                            src={member.photoURL} 
+                            referrerPolicy="no-referrer;same-origin"
+                            className="h-7 w-7 rounded-full object-cover border border-[#E8E1D5] bg-white" 
+                            alt={member.displayName} 
+                          />
+                        )}
                         <div>
                           <span className="block text-xs font-bold text-[#2D1B08] truncate max-w-[120px]">
                             {member.displayName} {member.userId === currentProfile.uid && " (You)"}

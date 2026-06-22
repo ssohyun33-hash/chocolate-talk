@@ -6,13 +6,24 @@ import { db, handleFirestoreError, OperationType } from "../firebase";
 import { UserProfile } from "../types";
 import Scanner from "./Scanner";
 
+const ensureEightDigitId = (uid: string, uniqueId?: string) => {
+  const clean = (uniqueId || "").replace(/[^0-9]/g, "");
+  if (clean.length === 8) return clean;
+  let hash = 0;
+  for (let i = 0; i < uid.length; i++) {
+    hash = uid.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return (10000000 + (Math.abs(hash) % 90000000)).toString();
+};
+
 interface AddFriendModalProps {
+  currentProfile: UserProfile;
   currentUserId: string;
   onClose: () => void;
   onFriendAdded: () => void;
 }
 
-export default function AddFriendModal({ currentUserId, onClose, onFriendAdded }: AddFriendModalProps) {
+export default function AddFriendModal({ currentProfile, currentUserId, onClose, onFriendAdded }: AddFriendModalProps) {
   const [targetId, setTargetId] = useState("");
   const [searching, setSearching] = useState(false);
   const [foundUser, setFoundUser] = useState<UserProfile | null>(null);
@@ -32,51 +43,82 @@ export default function AddFriendModal({ currentUserId, onClose, onFriendAdded }
     setFoundUser(null);
     setSuccess(false);
 
+    let searchErrorMsg = "";
+
     try {
       let foundDoc: any = null;
 
       // 1. Try querying uniqueId directly (universal string match for old 8-digit or new sweet IDs)
-      const qId = query(collection(db, "users"), where("uniqueId", "==", idToQuery.toUpperCase()));
-      const snapId = await getDocs(qId);
-      if (!snapId.empty) {
-        foundDoc = snapId.docs[0];
+      try {
+        const qId = query(collection(db, "users"), where("uniqueId", "==", idToQuery.toUpperCase()));
+        const snapId = await getDocs(qId);
+        if (!snapId.empty) {
+          foundDoc = snapId.docs[0];
+        } else {
+          // Fallback: If 8-digit numeric code searched, try querying as Number integer
+          const cleanDigits = idToQuery.replace(/[^0-9]/g, "");
+          if (cleanDigits.length === 8) {
+            const qNum = query(collection(db, "users"), where("uniqueId", "==", Number(cleanDigits)));
+            const snapNum = await getDocs(qNum);
+            if (!snapNum.empty) {
+              foundDoc = snapNum.docs[0];
+            }
+          }
+        }
+      } catch (e1: any) {
+        console.warn("Exact uniqueId query failed, trying email fallback...", e1);
+        searchErrorMsg = e1.message || String(e1);
       }
 
       // 2. Try querying email directly
       if (!foundDoc) {
-        const qEmail = query(collection(db, "users"), where("email", "==", idToQuery));
-        const snapEmail = await getDocs(qEmail);
-        if (!snapEmail.empty) {
-          foundDoc = snapEmail.docs[0];
+        try {
+          const qEmail = query(collection(db, "users"), where("email", "==", idToQuery));
+          const snapEmail = await getDocs(qEmail);
+          if (!snapEmail.empty) {
+            foundDoc = snapEmail.docs[0];
+          }
+        } catch (e2: any) {
+          console.warn("Exact email query failed", e2);
+          if (!searchErrorMsg) searchErrorMsg = e2.message || String(e2);
         }
       }
 
       // 3. Fallback scan / search by nickname / display name or email prefix
       if (!foundDoc) {
-        const inputLower = idToQuery.toLowerCase();
-        const usersSnap = await getDocs(collection(db, "users"));
-        const match = usersSnap.docs.find(d => {
-          const uData = d.data();
-          const email = (uData.email || "").toLowerCase();
-          const dispName = (uData.displayName || "").toLowerCase();
-          const uniqueId = (uData.uniqueId || "").toLowerCase();
-          const emailPrefix = email.split("@")[0];
+        try {
+          const inputLower = idToQuery.toLowerCase();
+          const usersSnap = await getDocs(collection(db, "users"));
+          const match = usersSnap.docs.find(d => {
+            const uData = d.data();
+            const email = (uData.email || "").toLowerCase();
+            const dispName = (uData.displayName || "").toLowerCase();
+            const uniqueId = (uData.uniqueId || "").toLowerCase();
+            const emailPrefix = email.split("@")[0];
 
-          return (
-            email === inputLower ||
-            emailPrefix === inputLower ||
-            dispName === inputLower ||
-            dispName.includes(inputLower) ||
-            uniqueId === inputLower
-          );
-        });
-        if (match) {
-          foundDoc = match;
+            return (
+              email === inputLower ||
+              emailPrefix === inputLower ||
+              dispName === inputLower ||
+              dispName.includes(inputLower) ||
+              uniqueId === inputLower
+            );
+          });
+          if (match) {
+            foundDoc = match;
+          }
+        } catch (e3: any) {
+          console.warn("Full list fallback failed/prohibited", e3);
+          if (!searchErrorMsg) searchErrorMsg = e3.message || String(e3);
         }
       }
 
       if (!foundDoc) {
-        setErrorMessage("No user found with this chocolate ID, Gmail, or nickname.");
+        if (searchErrorMsg) {
+          setErrorMessage(`Search error: ${searchErrorMsg}. Double check security rules.`);
+        } else {
+          setErrorMessage("No user found with this chocolate ID, Gmail, or nickname.");
+        }
       } else {
         const docData = foundDoc.data();
         if (docData.uid === currentUserId) {
@@ -94,7 +136,7 @@ export default function AddFriendModal({ currentUserId, onClose, onFriendAdded }
       }
     } catch (err: any) {
       console.error(err);
-      setErrorMessage("Failed to search. Check configuration.");
+      setErrorMessage(`Failed to search: ${err.message || err}`);
     } finally {
       setSearching(false);
     }
@@ -106,28 +148,29 @@ export default function AddFriendModal({ currentUserId, onClose, onFriendAdded }
     setErrorMessage("");
 
     try {
+      const targetFriendUniqueId = ensureEightDigitId(foundUser.uid, foundUser.uniqueId);
       // 1. Persist as real friend in Firestore subcollection /users/{myUid}/friends/{friendUid}
       const refPath = `users/${currentUserId}/friends/${foundUser.uid}`;
       await setDoc(doc(db, refPath), {
         friendId: foundUser.uid,
         displayName: foundUser.displayName,
         photoURL: foundUser.photoURL,
-        uniqueId: foundUser.uniqueId,
+        uniqueId: targetFriendUniqueId,
         addedAt: serverTimestamp(),
       });
 
-      // 2. Also automatically try to add a symmetric friend record so they instantly see each other (optional but amazing user experience!)
+      // 2. Also automatically try to add a symmetric friend record so they instantly see each other
       try {
+        const mySymmetricUniqueId = ensureEightDigitId(currentProfile.uid, currentProfile.uniqueId);
         await setDoc(doc(db, `users/${foundUser.uid}/friends/${currentUserId}`), {
           friendId: currentUserId,
-          displayName: "Friend back", // Fallback name, will show actual when profile gets read by them
-          photoURL: foundUser.photoURL, // we will fill from cached values
-          uniqueId: "", // we will fill as needed, but standard friend add works instantly
+          displayName: currentProfile.displayName || "Friend back", 
+          photoURL: currentProfile.photoURL || "", 
+          uniqueId: mySymmetricUniqueId, 
           addedAt: serverTimestamp(),
         });
       } catch (e) {
-        // Safe to ignore if security rules block writing friend to others' accounts directly
-        console.warn("Symmetric friend write skipped, standard local friend-add successful.");
+        console.warn("Symmetric friend write skipped or handled:", e);
       }
 
       setSuccess(true);

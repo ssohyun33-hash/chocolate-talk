@@ -51,6 +51,8 @@ export default function App() {
   const [friends, setFriends] = useState<Friend[]>([]);
   const [joinedChats, setJoinedChats] = useState<any[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [chatMembersCache, setChatMembersCache] = useState<Record<string, string>>({});
 
   // Authentication Form States
   const [signName, setSignName] = useState("");
@@ -282,6 +284,42 @@ export default function App() {
       unsubJoinedChats();
     };
   }, [profile, inspectingUser]);
+
+  // Load member lists (emails/names with commas) for group chats in the sidebar
+  useEffect(() => {
+    if (joinedChats.length === 0) return;
+
+    const unsubscribes: (() => void)[] = [];
+
+    // For each room in joinedChats, if it's a group chat, subscribe to its members
+    joinedChats.forEach((room) => {
+      if (!room.isGroup) return;
+
+      const membersRef = collection(db, "chats", room.chatId, "members");
+      const unsub = onSnapshot(membersRef, (snap) => {
+        const names: string[] = [];
+        snap.forEach((mDoc) => {
+          const mData = mDoc.data();
+          // Prefer email if available, otherwise fallback name
+          const name = mData.email || mData.displayName || "Comrade";
+          names.push(name);
+        });
+
+        setChatMembersCache((prev) => ({
+          ...prev,
+          [room.chatId]: names.join(", "),
+        }));
+      }, (err) => {
+        console.warn("Could not load group member names for cache:", err);
+      });
+
+      unsubscribes.push(unsub);
+    });
+
+    return () => {
+      unsubscribes.forEach((unsub) => unsub());
+    };
+  }, [joinedChats]);
 
   // Request standard Web Notification permission on initial loading
   useEffect(() => {
@@ -762,7 +800,9 @@ export default function App() {
       }`}>
         
         {/* Left Side: Sidebar Column */}
-        <div className={`w-80 border-r flex flex-col justify-between transition-colors duration-200 ${
+        <div className={`w-full md:w-80 border-r flex flex-col justify-between transition-colors duration-200 ${
+          activeChatId ? "hidden md:flex" : "flex"
+        } ${
           theme === "black" ? "bg-black border-zinc-800 text-white" : "bg-white border-[#E8E1D5] text-[#2D1B08]"
         }`}>
           
@@ -969,6 +1009,8 @@ export default function App() {
 
         {/* Right Side: Active Conversation panel workspace */}
         <div className={`flex-1 flex items-center justify-center p-0 relative h-full transition-colors duration-200 ${
+          !activeChatId ? "hidden md:flex" : "flex"
+        } ${
           theme === "black" ? "bg-black" : "bg-white"
         }`}>
           {showAdminConsole ? (
@@ -1019,7 +1061,8 @@ export default function App() {
       <AnimatePresence>
         {showAddFriend && (
           <AddFriendModal
-            currentUserId={profile.uid}
+            currentProfile={profile!}
+            currentUserId={profile!.uid}
             onClose={() => setShowAddFriend(false)}
             onFriendAdded={() => {}}
           />

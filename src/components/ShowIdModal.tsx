@@ -3,8 +3,19 @@ import { X, Clipboard, Check, Search, UserPlus, RefreshCw, QrCode, Scan, Camera,
 import { motion, AnimatePresence } from "motion/react";
 import { UserProfile } from "../types";
 import { collection, query, where, getDocs, doc, writeBatch, serverTimestamp } from "firebase/firestore";
-import { db } from "../firebase";
+import { db, handleFirestoreError, OperationType } from "../firebase";
 import jsQR from "jsqr";
+import QRCode from "qrcode";
+
+const ensureEightDigitId = (uid: string, uniqueId?: string) => {
+  const clean = (uniqueId || "").replace(/[^0-9]/g, "");
+  if (clean.length === 8) return clean;
+  let hash = 0;
+  for (let i = 0; i < uid.length; i++) {
+    hash = uid.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return (10000000 + (Math.abs(hash) % 90000000)).toString();
+};
 
 interface ShowIdModalProps {
   profile: UserProfile;
@@ -88,6 +99,27 @@ export default function ShowIdModal({ profile, onClose, theme }: ShowIdModalProp
   const [otherUsers, setOtherUsers] = useState<any[]>([]);
   const [selectedSimUser, setSelectedSimUser] = useState<string>("");
   const [simulating, setSimulating] = useState(false);
+  const [qrCodeUrl, setQrCodeUrl] = useState<string>("");
+
+  useEffect(() => {
+    if (profile.uniqueId) {
+      QRCode.toDataURL(profile.uniqueId, {
+        errorCorrectionLevel: "M",
+        margin: 2,
+        width: 180,
+        color: {
+          dark: "#2D1B08",
+          light: "#FFFFFF"
+        }
+      })
+      .then((url) => {
+        setQrCodeUrl(url);
+      })
+      .catch((err) => {
+        console.error("Failed to generate QR Code data URL:", err);
+      });
+    }
+  }, [profile.uniqueId]);
 
   // Generate matrix once for this account
   const qrMatrix = generateDeterministicQRMatrix(profile.uniqueId);
@@ -139,17 +171,25 @@ export default function ShowIdModal({ profile, onClose, theme }: ShowIdModalProp
         video: { facingMode: "environment" }
       });
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute("playsinline", "true");
-        videoRef.current.play().catch(e => console.log("Video play request failed/deferred:", e));
-      }
       setCameraActive(true);
     } catch (err: any) {
       console.warn("Web camera blocked or inaccessible inside frame:", err);
       setCameraError("Camera permission blocked by browser sandbox/iframe or missing hardware. Try scanning with our custom QR Image Uploader below!");
     }
   };
+
+  // Keep video source synced up reliably on mount
+  useEffect(() => {
+    if (cameraActive && videoRef.current && streamRef.current) {
+      try {
+        videoRef.current.srcObject = streamRef.current;
+        videoRef.current.setAttribute("playsinline", "true");
+        videoRef.current.play().catch(e => console.log("Video playback delayed:", e));
+      } catch (err) {
+        console.warn("Video stream sync failed:", err);
+      }
+    }
+  }, [cameraActive, videoRef.current]);
 
   const stopCamera = () => {
     if (streamRef.current) {
@@ -258,7 +298,7 @@ export default function ShowIdModal({ profile, onClose, theme }: ShowIdModalProp
     return () => stopCamera();
   }, [activeTab]);
 
-  // Execute Search Database manually
+  // Execute Search Database manually with robust multi-stage fallbacks
   const performSearchById = async (searchId: string) => {
     const rawVal = searchId.trim();
     if (!rawVal) {
@@ -269,7 +309,7 @@ export default function ShowIdModal({ profile, onClose, theme }: ShowIdModalProp
     // Filter validation: strictly accept only 8-digit numeric IDs
     const cleanId = rawVal.replace(/[^0-9]/g, "");
     if (cleanId.length !== 8) {
-      setErrorMessage("Failed to detect. This is not a KakaoTalk styled 8-digit numeric profile barcode.");
+      setErrorMessage("Failed to detect. This is not a Chocolate styled 8-digit numeric profile barcode.");
       return;
     }
 
@@ -279,30 +319,54 @@ export default function ShowIdModal({ profile, onClose, theme }: ShowIdModalProp
     setSuccess(false);
 
     try {
+      let foundDoc: any = null;
+
+      // 1. Direct query as string
       const q = query(collection(db, "users"), where("uniqueId", "==", cleanId));
       const snap = await getDocs(q);
       
-      if (snap.empty) {
+      if (!snap.empty) {
+        foundDoc = snap.docs[0];
+      } else {
+        // 2. Direct query as number in case it was stored as integer
+        const qNum = query(collection(db, "users"), where("uniqueId", "==", Number(cleanId)));
+        const snapNum = await getDocs(qNum);
+        if (!snapNum.empty) {
+          foundDoc = snapNum.docs[0];
+        } else {
+          // 3. Robust client fallback scanning all users (handles formatting mismatches or security rules details)
+          const allUsersSnap = await getDocs(collection(db, "users"));
+          const matchDoc = allUsersSnap.docs.find((d) => {
+            const uData = d.data();
+            const uniqueIdStr = String(uData.uniqueId || "").trim();
+            const cleanUniqueId = uniqueIdStr.replace(/[^0-9]/g, "");
+            return cleanUniqueId === cleanId || uniqueIdStr.toLowerCase() === cleanId.toLowerCase();
+          });
+          if (matchDoc) {
+            foundDoc = matchDoc;
+          }
+        }
+      }
+
+      if (!foundDoc) {
         setErrorMessage(`Chocolatier address "${cleanId}" not found in database.`);
       } else {
-        const foundDoc = snap.docs[0];
         const data = foundDoc.data();
-        
         if (data.uid === profile.uid) {
-          setErrorMessage("That QR code is your own! Scan a friend's KakaoTalk card.");
+          setErrorMessage("That QR code is your own! Scan a friend's Chocolate QR code.");
         } else {
           setFoundUser({
             uid: data.uid,
-            displayName: data.displayName,
-            photoURL: data.photoURL,
-            uniqueId: data.uniqueId,
+            displayName: data.displayName || "ChocTalk Friend",
+            photoURL: data.photoURL || "",
+            uniqueId: String(data.uniqueId || cleanId),
             email: data.email || "",
           });
         }
       }
     } catch (err: any) {
       console.error(err);
-      setErrorMessage("An unexpected error occurred during database lookup.");
+      setErrorMessage("An unexpected error occurred during database lookup. Please check connection.");
     } finally {
       setSearching(false);
     }
@@ -334,15 +398,19 @@ export default function ShowIdModal({ profile, onClose, theme }: ShowIdModalProp
     try {
       const batch = writeBatch(db);
 
+      const receiverUniqueId = ensureEightDigitId(foundUser.uid, foundUser.uniqueId);
+      const senderUniqueId = ensureEightDigitId(profile.uid, profile.uniqueId);
+
       // Save outbound request
       const outboundRef = doc(db, `users/${profile.uid}/friends/${foundUser.uid}`);
       batch.set(outboundRef, {
         friendId: foundUser.uid,
-        displayName: foundUser.displayName,
-        photoURL: foundUser.photoURL,
-        uniqueId: foundUser.uniqueId,
-        email: foundUser.email,
+        displayName: foundUser.displayName || "ChocTalk Friend",
+        photoURL: foundUser.photoURL || "",
+        uniqueId: receiverUniqueId,
+        email: foundUser.email || "",
         status: "outbound",
+        addedAt: serverTimestamp(),
         createdAt: serverTimestamp(),
       });
 
@@ -350,11 +418,12 @@ export default function ShowIdModal({ profile, onClose, theme }: ShowIdModalProp
       const inboundRef = doc(db, `users/${foundUser.uid}/friends/${profile.uid}`);
       batch.set(inboundRef, {
         friendId: profile.uid,
-        displayName: profile.displayName,
-        photoURL: profile.photoURL,
-        uniqueId: profile.uniqueId,
+        displayName: profile.displayName || "ChocTalk Friend",
+        photoURL: profile.photoURL || "",
+        uniqueId: senderUniqueId,
         email: profile.email || "",
         status: "inbound",
+        addedAt: serverTimestamp(),
         createdAt: serverTimestamp(),
       });
 
@@ -364,6 +433,7 @@ export default function ShowIdModal({ profile, onClose, theme }: ShowIdModalProp
       setFoundUser(null);
     } catch (err: any) {
       console.error(err);
+      handleFirestoreError(err, OperationType.WRITE, `users/${profile.uid}/friends/${foundUser.uid}`);
       setErrorMessage("Could not submit friend proposal successfully.");
     } finally {
       setSearching(false);
@@ -371,25 +441,25 @@ export default function ShowIdModal({ profile, onClose, theme }: ShowIdModalProp
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-3xs p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-3xs p-2 sm:p-6">
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 15 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 15 }}
-        className={`w-full max-w-lg rounded-[2rem] border overflow-hidden shadow-2xl transition-all duration-200 ${
+        className={`w-full max-w-lg max-h-[96vh] sm:max-h-[90vh] flex flex-col rounded-[2rem] border overflow-hidden shadow-2xl transition-all duration-200 ${
           isDark 
             ? "bg-[#09090b] border-zinc-800 text-white" 
             : "bg-white border-[#E8E1D5] text-[#2D1B08]"
         }`}
       >
         {/* Modal Window Header */}
-        <div className={`flex items-center justify-between border-b px-6 py-4.5 ${
+        <div className={`flex items-center justify-between border-b px-6 py-4 shrink-0 ${
           isDark ? "border-zinc-850 bg-zinc-950" : "border-[#E8E1D5] bg-[#FAF6F0]"
         }`}>
           <div className="flex items-center space-x-2">
             <Sparkles className={`h-4.5 w-4.5 ${isDark ? "text-yellow-400" : "text-[#7B3F00]"}`} />
-            <span className="font-sans font-extrabold text-[#7B3F00] text-sm select-none">
-              KakaoTalk My ID Center
+            <span className="font-sans font-extrabold text-[#7B3F00] text-xs sm:text-sm select-none">
+              ChocTalk My ID Center
             </span>
           </div>
           <button
@@ -434,13 +504,13 @@ export default function ShowIdModal({ profile, onClose, theme }: ShowIdModalProp
           >
             <span className="flex items-center justify-center space-x-1.5">
               <Scan className="h-4 w-4" />
-              <span>Kakao QR Scanner</span>
+              <span>Chocolate QR Scanner</span>
             </span>
           </button>
         </div>
 
         {/* Modal Panels wrapper */}
-        <div className="p-6 space-y-6">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 sm:space-y-6">
           <AnimatePresence mode="wait">
             
             {/* VIEW TAB 1: USER ID QR CARD */}
@@ -452,7 +522,7 @@ export default function ShowIdModal({ profile, onClose, theme }: ShowIdModalProp
                 exit={{ opacity: 0, x: 10 }}
                 className="space-y-6 flex flex-col items-center"
               >
-                {/* Visual Premium KakaoTalk Card Display */}
+                {/* Visual Premium ChocTalk Card Display */}
                 <div className={`w-full max-w-sm rounded-[2.25rem] border p-6 text-center select-none relative overflow-hidden transition-all shadow-md ${
                   isDark 
                     ? "bg-[#141417] border-zinc-800" 
@@ -463,7 +533,7 @@ export default function ShowIdModal({ profile, onClose, theme }: ShowIdModalProp
                     <div className="flex items-center space-x-2">
                       <div className="h-2 w-2 rounded-full bg-yellow-600 animate-ping" />
                       <span className="text-[9px] uppercase font-mono tracking-widest font-black opacity-80">
-                        KakaoTalk ID Center
+                        ChocTalk ID Center
                       </span>
                     </div>
                     <span className="text-[8px] font-mono opacity-60">Verified Member</span>
@@ -473,26 +543,23 @@ export default function ShowIdModal({ profile, onClose, theme }: ShowIdModalProp
                     {profile.displayName && profile.displayName.toUpperCase()}
                   </h3>
 
-                  {/* CUSTOM Dynamic Deterministic QR Grid render */}
+                  {/* REAL Standard-compliant Decodable QR Barcode render */}
                   <div className="flex justify-center my-5">
                     <div className="bg-white p-4.5 rounded-3xl shadow-lg border border-[#3C1E1E]/10 flex flex-col items-center">
-                      <svg width="154" height="154" viewBox="0 0 21 21" className="shape-rendering-crisp">
-                        {qrMatrix.map((row, rIdx) => 
-                          row.map((cellFilled, cIdx) => (
-                            <rect
-                              key={`${rIdx}-${cIdx}`}
-                              x={cIdx}
-                              y={rIdx}
-                              width="1"
-                              height="1"
-                              fill={cellFilled ? "#2D1B08" : "transparent"}
-                              rx={0.05}
-                            />
-                          ))
-                        )}
-                      </svg>
+                      {qrCodeUrl ? (
+                        <img 
+                          src={qrCodeUrl} 
+                          alt="ChocTalk Card Barcode" 
+                          className="w-[154px] h-[154px] rounded-xl object-contain select-none"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <div className="w-[154px] h-[154px] flex items-center justify-center bg-gray-50 rounded-xl">
+                          <RefreshCw className="h-6 w-6 animate-spin text-[#7B3F00]/30" />
+                        </div>
+                      )}
                       
-                      {/* Logo watermark centered inside the custom QR svg layout */}
+                      {/* Logo watermark centered inside the custom QR layout */}
                       <div className="font-mono text-[7px] font-extrabold uppercase bg-yellow-400 text-[#7B3F00] px-1.5 py-0.5 rounded-md tracking-wider mt-2.5 shadow-3xs">
                         CHOC-TALK
                       </div>
@@ -551,15 +618,16 @@ export default function ShowIdModal({ profile, onClose, theme }: ShowIdModalProp
                     </div>
                   </div>
 
-                  {cameraActive ? (
-                    <video
-                      ref={videoRef}
-                      autoPlay
-                      playsInline
-                      muted
-                      className="absolute inset-0 w-full h-full object-cover"
-                    />
-                  ) : (
+                  {/* Video element always rendered in DOM to keep ref bound correctly, avoiding React mount race condition */}
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className={`absolute inset-0 w-full h-full object-cover ${cameraActive ? "block" : "hidden"}`}
+                  />
+
+                  {!cameraActive && (
                     <div className="z-10 text-center p-6 space-y-3">
                       <Camera className="h-10 w-10 text-gray-500 mx-auto animate-pulse" />
                       <p className="text-xs text-gray-400 font-medium">Camera tracking is offline.</p>
@@ -606,7 +674,7 @@ export default function ShowIdModal({ profile, onClose, theme }: ShowIdModalProp
                     <div className="absolute inset-0 z-30 bg-black/90 flex flex-col items-center justify-center space-y-3">
                       <div className="h-8 w-8 border-2 border-[#7B3F00] border-t-transparent rounded-full animate-spin" />
                       <p className="text-xs text-yellow-500 font-mono font-black animate-pulse uppercase tracking-wider">
-                        📟 Intercepting KakaoTalk Datastream...
+                        📟 Intercepting Chocolate Datastream...
                       </p>
                     </div>
                   )}
@@ -617,7 +685,7 @@ export default function ShowIdModal({ profile, onClose, theme }: ShowIdModalProp
                   isDark ? "bg-[#141417] border-zinc-800" : "bg-[#FAF6F0] border-[#E8E1D5]"
                 }`}>
                   <h4 className="text-xs font-extrabold text-[#7B3F00] mb-2 uppercase tracking-wide flex items-center space-x-1">
-                    <span>💡 Tester Instant Kakao Scanner Simulation</span>
+                    <span>💡 Tester Instant Chocolate Scanner Simulation</span>
                   </h4>
                   <p className="text-[10px] text-gray-400 mb-3 leading-relaxed">
                     Test the scanner immediately by choosing any companion in the workspace DB below. This simulates holding your phone up to inspect their custom QR Card!
