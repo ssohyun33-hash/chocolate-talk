@@ -7,6 +7,8 @@ interface ProfileModalProps {
   profile: UserProfile;
   onSave: (displayName: string, photoURL: string) => Promise<void>;
   onClose: () => void;
+  theme: "white" | "black";
+  onThemeChange: (theme: "white" | "black") => void;
 }
 
 // Preset gorgeous chocolate-themed avatars for quick selection
@@ -17,11 +19,12 @@ const PRESET_AVATARS = [
   "https://images.unsplash.com/photo-1515003197210-e0cd71810b5f?w=150&auto=format&fit=crop", // Sweet cup cake
 ];
 
-export default function ProfileModal({ profile, onSave, onClose }: ProfileModalProps) {
+export default function ProfileModal({ profile, onSave, onClose, theme, onThemeChange }: ProfileModalProps) {
   const [displayName, setDisplayName] = useState(profile.displayName);
   const [photoURL, setPhotoURL] = useState(profile.photoURL || PRESET_AVATARS[0]);
   const [saving, setSaving] = useState(false);
   const [imageError, setImageError] = useState("");
+  const isDark = theme === "black";
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -85,18 +88,26 @@ export default function ProfileModal({ profile, onSave, onClose }: ProfileModalP
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-3xs p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-3xs p-4">
       <motion.div
         initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-md bg-white rounded-[2rem] border border-[#E8E1D5] shadow-xl overflow-hidden"
+        className={`w-full max-w-md rounded-[2rem] border shadow-xl overflow-hidden transition-colors duration-200 ${
+          isDark ? "bg-[#09090b] border-zinc-800 text-white" : "bg-white border-[#E8E1D5] text-[#2D1B08]"
+        }`}
       >
         {/* Title header bar */}
-        <div className="flex items-center justify-between border-b border-[#E8E1D5] bg-white px-6 py-5">
-          <span className="font-sans font-bold text-base text-[#2D1B08] select-none">My Profile Settings</span>
+        <div className={`flex items-center justify-between border-b px-6 py-5 ${
+          isDark ? "border-zinc-850 bg-zinc-950" : "border-[#E8E1D5] bg-white"
+        }`}>
+          <span className={`font-sans font-bold text-base select-none ${isDark ? "text-zinc-100" : "text-[#2D1B08]"}`}>
+            My Profile Settings
+          </span>
           <button
             onClick={onClose}
-            className="rounded-full p-1.5 text-gray-400 hover:bg-[#F5F1EB] hover:text-gray-600 transition"
+            className={`rounded-full p-1.5 transition ${
+              isDark ? "text-zinc-400 hover:bg-[#18181b] hover:text-white" : "text-gray-400 hover:bg-[#F5F1EB] hover:text-gray-600"
+            }`}
           >
             <X className="h-5 w-5" />
           </button>
@@ -110,7 +121,9 @@ export default function ProfileModal({ profile, onSave, onClose }: ProfileModalP
                 src={photoURL}
                 alt="Profile Avatar"
                 referrerPolicy="no-referrer"
-                className="h-24 w-24 rounded-full object-cover border border-[#E8E1D5] shadow-sm bg-white text-center"
+                className={`h-24 w-24 rounded-full object-cover border shadow-sm text-center ${
+                  isDark ? "border-zinc-700 bg-zinc-900" : "border-[#E8E1D5] bg-white"
+                }`}
                 onError={(e) => {
                   (e.target as HTMLImageElement).src = PRESET_AVATARS[0];
                 }}
@@ -127,8 +140,12 @@ export default function ProfileModal({ profile, onSave, onClose }: ProfileModalP
             </div>
 
             {/* Unique and unchangeable custom user token identification */}
-            <div className="flex flex-col items-center bg-[#F5F1EB] px-4 py-2 rounded-xl border border-[#E8E1D5]">
-              <span className="text-[9px] uppercase font-bold tracking-widest text-gray-400 mb-0.5">
+            <div className={`flex flex-col items-center px-4 py-2 rounded-xl border ${
+              isDark ? "bg-[#18181b] border-zinc-800" : "bg-[#F5F1EB] border-[#E8E1D5]"
+            }`}>
+              <span className={`text-[9px] uppercase font-bold tracking-widest mb-0.5 ${
+                isDark ? "text-zinc-500" : "text-gray-400"
+              }`}>
                 My Unchangeable ID
               </span>
               <span className="font-mono text-sm font-bold text-[#7B3F00] tracking-widest select-all">
@@ -139,7 +156,9 @@ export default function ProfileModal({ profile, onSave, onClose }: ProfileModalP
 
           {/* Preset Picker choices section */}
           <div>
-            <span className="block text-xs font-semibold text-gray-400 mb-2">
+            <span className={`block text-xs font-semibold mb-2 ${
+              isDark ? "text-zinc-400" : "text-gray-450"
+            }`}>
               Select Chocolate Avatar Preset:
             </span>
             <div className="flex justify-center space-x-3.5">
@@ -152,7 +171,9 @@ export default function ProfileModal({ profile, onSave, onClose }: ProfileModalP
                     setPhotoURL(url);
                   }}
                   className={`relative rounded-full h-11 w-11 overflow-hidden border transition ${
-                    photoURL === url ? "border-[#7B3F00] scale-105 ring-2 ring-[#7B3F00]/20" : "border-neutral-200 grayscale-30"
+                    photoURL === url 
+                      ? "border-[#7B3F00] scale-105 ring-2 ring-[#7B3F00]/20" 
+                      : isDark ? "border-zinc-800 grayscale-30" : "border-neutral-200 grayscale-30"
                   }`}
                 >
                   <img src={url} className="h-full w-full object-cover" alt="Preset choice" />
@@ -168,7 +189,9 @@ export default function ProfileModal({ profile, onSave, onClose }: ProfileModalP
 
           {/* Form input fields */}
           <div className="flex flex-col space-y-2">
-            <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">
+            <label className={`text-xs font-bold uppercase tracking-wide ${
+              isDark ? "text-zinc-400" : "text-gray-400"
+            }`}>
               Display Name
             </label>
             <input
@@ -178,8 +201,49 @@ export default function ProfileModal({ profile, onSave, onClose }: ProfileModalP
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="Choc Lover"
-              className="rounded-xl border border-[#E8E1D5] bg-white px-4 py-2.5 text-sm text-[#2D1B08] outline-none focus:border-[#7B3F00] focus:ring-1 focus:ring-[#7B3F00]/10 shadow-3xs"
+              className={`rounded-xl border px-4 py-2.5 text-sm outline-none focus:ring-1 focus:ring-[#7B3F00]/10 shadow-3xs ${
+                isDark 
+                  ? "bg-[#18181b] border-zinc-700 text-white focus:border-zinc-500" 
+                  : "bg-white border-[#E8E1D5] text-[#2D1B08] focus:border-[#7B3F00]"
+              }`}
             />
+          </div>
+
+          {/* 🌓 Black Theme / White Theme Selection Block */}
+          <div className="flex flex-col space-y-2 pt-1 border-t border-[#E8E1D5]/40">
+            <label className={`text-xs font-bold uppercase tracking-wide ${
+              isDark ? "text-zinc-400" : "text-gray-400"
+            }`}>
+              Application Theme Accent
+            </label>
+            <div className={`grid grid-cols-2 gap-2 p-1 rounded-xl ${
+              isDark ? "bg-[#18181b]" : "bg-[#F5F1EB]"
+            }`}>
+              <button
+                id="white-mode-btn"
+                type="button"
+                onClick={() => onThemeChange("white")}
+                className={`py-2 text-xs font-bold rounded-lg transition cursor-pointer select-none ${
+                  theme === "white" 
+                    ? "bg-white text-[#2D1B08] shadow-xs" 
+                    : isDark ? "text-zinc-400 hover:text-white" : "text-gray-500 hover:text-gray-800"
+                }`}
+              >
+                ☀️ White Mode
+              </button>
+              <button
+                id="black-mode-btn"
+                type="button"
+                onClick={() => onThemeChange("black")}
+                className={`py-2 text-xs font-bold rounded-lg transition cursor-pointer select-none ${
+                  theme === "black" 
+                    ? "bg-black text-white shadow-xs border border-zinc-800" 
+                    : "text-gray-500 hover:text-gray-800"
+                }`}
+              >
+                🌙 Black Mode
+              </button>
+            </div>
           </div>
 
           {imageError && (
@@ -193,16 +257,21 @@ export default function ProfileModal({ profile, onSave, onClose }: ProfileModalP
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 rounded-xl border border-[#E8E1D5] py-3 text-sm font-semibold text-gray-500 hover:bg-gray-50 transition"
+              className={`flex-1 rounded-xl border py-3 text-sm font-semibold transition ${
+                isDark 
+                  ? "border-zinc-755 text-zinc-400 hover:bg-[#18181b]" 
+                  : "border-[#E8E1D5] text-gray-500 hover:bg-gray-50"
+              }`}
             >
               Cancel
             </button>
             <button
+              id="save-settings-btn"
               type="submit"
               disabled={saving || !displayName.trim()}
-              className="flex-1 rounded-xl bg-[#7B3F00] py-3 text-sm font-semibold text-white shadow-md hover:bg-[#5C2E00] disabled:bg-gray-100 disabled:text-gray-600 transition"
+              className="flex-1 rounded-xl bg-[#7B3F00] py-3 text-sm font-semibold text-white shadow-md hover:bg-[#5C2E00] disabled:bg-zinc-800 disabled:text-zinc-650 transition"
             >
-              {saving ? "Saving changes..." : "Save Profile"}
+              {saving ? "Saving changes..." : "Save Settings"}
             </button>
           </div>
         </form>

@@ -19,17 +19,21 @@ import { UserProfile, Friend, Chat } from "./types";
 import AddFriendModal from "./components/AddFriendModal";
 import GroupChatModal from "./components/GroupChatModal";
 import ProfileModal from "./components/ProfileModal";
+import ShowIdModal from "./components/ShowIdModal";
 import ActiveChatWindow from "./components/ActiveChatWindow";
 import AdminConsole from "./components/AdminConsole";
-import AllFilesView from "./components/AllFilesView";
 
 const generateSweetID = () => {
-  const flavors = ["Dark", "Milk", "Cocoa", "Sweet", "Fudge", "Choco", "Truffle", "Choc", "Praline", "Mocha", "Hazel", "Mint", "Matcha", "Berry", "Honey"];
-  const structures = ["Ganache", "Bar", "Cup", "Bite", "Bean", "Nibs", "Syrup", "Melt", "Kiss", "Cake", "Swirl", "Cookie", "Wafer", "Bonbon"];
-  const randomFlavor = flavors[Math.floor(Math.random() * flavors.length)];
-  const randomStructure = structures[Math.floor(Math.random() * structures.length)];
-  const randomSuffix = Math.floor(1000 + Math.random() * 9000).toString(); // 4-digit number
-  return `${randomFlavor}-${randomStructure}-${randomSuffix}`.toUpperCase();
+  // Pure 8-digit random number as string
+  return Math.floor(10000000 + Math.random() * 90000000).toString();
+};
+
+const getDeterministicNumericID = (uid: string) => {
+  let hash = 0;
+  for (let i = 0; i < uid.length; i++) {
+    hash = uid.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return (10000000 + (Math.abs(hash) % 90000000)).toString();
 };
 
 export default function App() {
@@ -65,21 +69,18 @@ export default function App() {
   // Announcement Toast Overlay States
   const [activeAnnouncement, setActiveAnnouncement] = useState<{ id: string; text: string; type: "ios" | "android" | "global" } | null>(null);
 
-  // Routing and Address Bar History Sync
-  const [currentPath, setCurrentPath] = useState(window.location.pathname);
+  // Theme state: white or black mode
+  const [theme, setTheme] = useState<"white" | "black">(() => {
+    return (localStorage.getItem("chocolate_talk_theme") as "white" | "black") || "white";
+  });
 
-  useEffect(() => {
-    const handlePopState = () => {
-      setCurrentPath(window.location.pathname);
-    };
-    window.addEventListener("popstate", handlePopState);
-    return () => window.removeEventListener("popstate", handlePopState);
-  }, []);
-
-  const navigateTo = (path: string) => {
-    window.history.pushState(null, "", path);
-    setCurrentPath(path);
+  const handleThemeChange = (newTheme: "white" | "black") => {
+    setTheme(newTheme);
+    localStorage.setItem("chocolate_talk_theme", newTheme);
   };
+
+  // Show ID modal visibility state
+  const [showShowId, setShowShowId] = useState(false);
 
   // 1. Subscribe to Authentication State changes
   useEffect(() => {
@@ -179,11 +180,19 @@ export default function App() {
 
       if (userSnap.exists()) {
         const d = userSnap.data();
+        let currentId = d.uniqueId;
+
+        // Auto-heal empty, placeholder, or non-numeric (old sweet IDs) to proper 8-digit number
+        if (!currentId || currentId === "--------" || isNaN(Number(currentId))) {
+          currentId = generateSweetID();
+          await setDoc(userRef, { uniqueId: currentId }, { merge: true });
+        }
+
         const profileData: UserProfile = {
           uid: d.uid,
           displayName: d.displayName,
           photoURL: d.photoURL,
-          uniqueId: d.uniqueId,
+          uniqueId: currentId,
           createdAt: d.createdAt,
           email: d.email || userEmail,
         };
@@ -210,12 +219,13 @@ export default function App() {
       }
     } catch (err: any) {
       console.error("Profile synchronization: init failed:", err);
-      // Fallback with local details to prevent blocking login
+      // Fallback with stable deterministic details to prevent blank/placeholder IDs
+      const fallbackId = getDeterministicNumericID(user.uid);
       setProfile({
         uid: user.uid,
         displayName: user.displayName || "Sweet Chocolatier",
         photoURL: user.photoURL || "https://images.unsplash.com/photo-1511381939415-e44015466834?w=150&auto=format&fit=crop",
-        uniqueId: "--------",
+        uniqueId: fallbackId,
         createdAt: null,
         email: user.email || ""
       });
@@ -747,21 +757,19 @@ export default function App() {
         </div>
       )}
 
-      {currentPath.endsWith("/all") ? (
-        <AllFilesView
-          currentUser={currentUser}
-          profile={profile}
-          joinedChats={joinedChats}
-          onNavigateBack={() => navigateTo("/")}
-        />
-      ) : (
-        <div className="w-full h-full bg-white flex overflow-hidden">
+      <div className={`w-full h-full flex overflow-hidden transition-colors duration-200 ${
+        theme === "black" ? "bg-[#09090b] text-white" : "bg-white text-[#2D1B08]"
+      }`}>
         
         {/* Left Side: Sidebar Column */}
-        <div className="w-80 border-r border-[#E8E1D5] flex flex-col justify-between bg-white">
+        <div className={`w-80 border-r flex flex-col justify-between transition-colors duration-200 ${
+          theme === "black" ? "bg-black border-zinc-800 text-white" : "bg-white border-[#E8E1D5] text-[#2D1B08]"
+        }`}>
           
-          {/* Top Panel: Profiler metadata */}
-          <div className="p-6 border-b border-[#E8E1D5] bg-white">
+          {/* Top Panel: Profiler metadata & Settings trigger */}
+          <div className={`p-6 border-b transition-colors duration-200 ${
+            theme === "black" ? "bg-black border-zinc-800" : "bg-white border-[#E8E1D5]"
+          }`}>
             <div className="flex items-center justify-between mb-4 leading-none">
               <div 
                 onClick={() => setShowEditProfile(true)}
@@ -771,63 +779,62 @@ export default function App() {
                   src={profile.photoURL}
                   referrerPolicy="no-referrer"
                   alt={profile.displayName}
-                  className="h-10 w-10 rounded-full object-cover border border-[#E8E1D5] group-hover:border-[#7B3F00] transition shadow-sm bg-white"
+                  className={`h-10 w-10 rounded-full object-cover border group-hover:border-[#7B3F00] transition shadow-sm ${
+                    theme === "black" ? "border-zinc-700 bg-zinc-900" : "border-[#E8E1D5] bg-white"
+                  }`}
                 />
                 <div className="text-left select-none">
-                  <span className="block font-sans font-bold text-sm text-[#2D1B08] leading-tight group-hover:text-[#7B3F00] transition truncate max-w-[120px]">
+                  <span className={`block font-sans font-bold text-sm leading-tight group-hover:text-[#7B3F00] transition truncate max-w-[120px] ${
+                    theme === "black" ? "text-zinc-100" : "text-[#2D1B08]"
+                  }`}>
                     {profile.displayName}
                   </span>
                   <span className="block font-mono text-[9px] text-gray-400 leading-none mt-0.5">
-                    Change Profile
+                    Settings & Profile
                   </span>
                 </div>
               </div>
 
               <button
                 onClick={handleLogout}
-                className="rounded-full p-2 bg-[#F5F1EB] text-gray-500 hover:bg-[#E8E1D5] hover:text-[#7B3F00] transition shadow-sm"
+                className={`rounded-full p-2 transition shadow-sm ${
+                  theme === "black" 
+                    ? "bg-[#18181b] text-zinc-400 hover:bg-zinc-800 hover:text-white" 
+                    : "bg-[#F5F1EB] text-gray-500 hover:bg-[#E8E1D5] hover:text-[#7B3F00]"
+                }`}
               >
                 <LogOut className="h-4 w-4" />
               </button>
             </div>
 
-            {/* Display Unique non-changeable numeric ID */}
-            <div className="flex items-center justify-between bg-[#F5F1EB] rounded-lg px-3 py-1.5 border border-[#E8E1D5] select-all font-mono">
-              <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest leading-none">
+            {/* Display Unique non-changeable numeric ID button to launch newly added scanning/writing view */}
+            <button
+              id="sidebar-show-id-trigger"
+              onClick={() => setShowShowId(true)}
+              className={`w-full flex items-center justify-between rounded-lg px-3 py-2 border transition font-mono text-left cursor-pointer group ${
+                theme === "black" 
+                  ? "bg-[#18181b] border-zinc-800 hover:bg-zinc-800" 
+                  : "bg-[#F5F1EB] border-[#E8E1D5] hover:bg-[#E8E1D5]"
+              }`}
+            >
+              <span className={`text-[8px] font-bold uppercase tracking-widest leading-none ${
+                theme === "black" ? "text-zinc-500" : "text-gray-400"
+              }`}>
                 My Choc ID:
               </span>
-              <span className="text-xs font-bold text-[#7B3F00] tracking-widest leading-none">
-                {profile.uniqueId}
-              </span>
-            </div>
+              <div className="flex items-center space-x-1.5">
+                <span className="text-xs font-bold text-[#7B3F00] tracking-widest leading-none">
+                  {profile.uniqueId}
+                </span>
+                <span className="text-[8px] bg-[#7B3F00]/10 text-[#7B3F00] px-1 py-0.5 rounded font-extrabold uppercase leading-none">
+                  Show
+                </span>
+              </div>
+            </button>
           </div>
 
           {/* Center Scroll Workspace: Friends & Conversations */}
           <div className="flex-1 overflow-y-auto py-2 space-y-6">
-            
-            {/* 📂 Central File Vault Redirect Button */}
-            <div className="px-6 pt-1">
-              <button
-                id="all-files-navigator-btn"
-                onClick={() => navigateTo("/all")}
-                className="w-full flex items-center justify-between bg-[#FAF6F0] hover:bg-[#7B3F00]/5 border border-[#E8E1D5] hover:border-[#7B3F00] text-left rounded-xl p-3.5 transition group cursor-pointer"
-              >
-                <div className="flex items-center space-x-3">
-                  <div className="h-8 w-8 bg-[#7B3F00] rounded-lg flex items-center justify-center text-white shadow-xs group-hover:scale-105 transition shrink-0">
-                    <FolderClosed className="h-4 w-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <span className="block font-sans font-bold text-xs text-[#2D1B08] group-hover:text-[#7B3F00] transition leading-none truncate">
-                      Talk Files Archive
-                    </span>
-                    <span className="block text-[8px] font-mono font-bold text-[#7B3F00] uppercase tracking-wider mt-1 select-none leading-none">
-                      /all website lists
-                    </span>
-                  </div>
-                </div>
-                <ChevronRight className="h-4 w-4 text-gray-400 group-hover:text-[#7B3F00] group-hover:translate-x-0.5 transition shrink-0" />
-              </button>
-            </div>
 
             {/* Friends Registry list */}
             <div>
@@ -961,7 +968,9 @@ export default function App() {
         </div>
 
         {/* Right Side: Active Conversation panel workspace */}
-        <div className="flex-1 bg-white flex items-center justify-center p-0 relative h-full">
+        <div className={`flex-1 flex items-center justify-center p-0 relative h-full transition-colors duration-200 ${
+          theme === "black" ? "bg-black" : "bg-white"
+        }`}>
           {showAdminConsole ? (
             <AdminConsole
               onSelectChatId={(cId) => {
@@ -983,10 +992,13 @@ export default function App() {
               currentProfile={profile}
               friendsList={friends}
               onChatDeletedOrLeft={() => setActiveChatId(null)}
+              theme={theme}
             />
           ) : (
             <div className="text-center p-8 flex flex-col items-center space-y-4 choose-prompt select-none">
-              <div className="h-16 w-16 bg-[#FDFBF7] rounded-full flex items-center justify-center text-[#7B3F00] border border-[#E8E1D5] shadow-sm animate-pulse">
+              <div className={`h-16 w-16 rounded-full flex items-center justify-center border shadow-sm animate-pulse ${
+                theme === "black" ? "bg-zinc-900 border-zinc-800 text-white" : "bg-[#FDFBF7] border-[#E8E1D5] text-[#7B3F00]"
+              }`}>
                 <MessageSquare className="h-7 w-7" />
               </div>
               <div>
@@ -1002,8 +1014,6 @@ export default function App() {
         </div>
 
       </div>
-
-      )}
 
       {/* MODAL LIGHTBOXES */}
       <AnimatePresence>
@@ -1029,6 +1039,16 @@ export default function App() {
             profile={profile}
             onSave={handleProfileSave}
             onClose={() => setShowEditProfile(false)}
+            theme={theme}
+            onThemeChange={handleThemeChange}
+          />
+        )}
+
+        {showShowId && (
+          <ShowIdModal
+            profile={profile}
+            onClose={() => setShowShowId(false)}
+            theme={theme}
           />
         )}
       </AnimatePresence>

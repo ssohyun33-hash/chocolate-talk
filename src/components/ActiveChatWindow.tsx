@@ -6,7 +6,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { 
   collection, query, orderBy, onSnapshot, addDoc, 
-  updateDoc, doc, deleteDoc, writeBatch, serverTimestamp, getDocs
+  updateDoc, doc, deleteDoc, writeBatch, serverTimestamp, getDocs, setDoc
 } from "firebase/firestore";
 import { db, handleFirestoreError, OperationType } from "../firebase";
 import { Chat, ChatMember, ChatMessage, UserProfile, Friend } from "../types";
@@ -16,14 +16,17 @@ interface ActiveChatWindowProps {
   currentProfile: UserProfile;
   friendsList: Friend[];
   onChatDeletedOrLeft: () => void;
+  theme?: "white" | "black";
 }
 
 export default function ActiveChatWindow({ 
   chatId, 
   currentProfile, 
   friendsList, 
-  onChatDeletedOrLeft 
+  onChatDeletedOrLeft,
+  theme = "white"
 }: ActiveChatWindowProps) {
+  const isDark = theme === "black";
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [members, setMembers] = useState<ChatMember[]>([]);
@@ -38,6 +41,90 @@ export default function ActiveChatWindow({
   const [reportReason, setReportReason] = useState("");
   const [reportSubmitting, setReportSubmitting] = useState(false);
   const [reportSuccess, setReportSuccess] = useState(false);
+
+  // Blocked users subscription lists
+  const [blockedUids, setBlockedUids] = useState<string[]>([]);
+
+  useEffect(() => {
+    const blocksRef = collection(db, "users", currentProfile.uid, "blocks");
+    const unsubscribeBlocks = onSnapshot(blocksRef, (snap) => {
+      const uids: string[] = [];
+      snap.forEach((docSnap) => {
+        uids.push(docSnap.id);
+      });
+      setBlockedUids(uids);
+    }, (error) => {
+      console.warn("Blocked subcollection skipped:", error);
+    });
+    return () => unsubscribeBlocks();
+  }, [currentProfile.uid]);
+
+  // Determine counterparty and checking statuses
+  const otherMember = chatMeta && !chatMeta.isGroup 
+    ? members.find((m) => m.userId !== currentProfile.uid) 
+    : null;
+
+  const isFriend = otherMember 
+    ? friendsList.some((f) => f.friendId === otherMember.userId) 
+    : true;
+
+  const isBlocked = otherMember 
+    ? blockedUids.includes(otherMember.userId) 
+    : false;
+
+  const handleAddFriendFromBanner = async () => {
+    if (!otherMember) return;
+    try {
+      const batch = writeBatch(db);
+      
+      // 1. Add to current user's friends subcollection
+      const myFriendDoc = doc(db, "users", currentProfile.uid, "friends", otherMember.userId);
+      batch.set(myFriendDoc, {
+        friendId: otherMember.userId,
+        displayName: otherMember.displayName,
+        photoURL: otherMember.photoURL,
+        uniqueId: "", 
+        addedAt: serverTimestamp()
+      });
+
+      // 2. Symmetrically write to their friends list so they are immediately mutually linked
+      const theirFriendDoc = doc(db, "users", otherMember.userId, "friends", currentProfile.uid);
+      batch.set(theirFriendDoc, {
+        friendId: currentProfile.uid,
+        displayName: currentProfile.displayName,
+        photoURL: currentProfile.photoURL,
+        uniqueId: currentProfile.uniqueId || "",
+        addedAt: serverTimestamp()
+      });
+
+      await batch.commit();
+    } catch (err) {
+      console.error("Error adding friend from banner: ", err);
+    }
+  };
+
+  const handleBlockUserFromBanner = async () => {
+    if (!otherMember) return;
+    try {
+      const blockRef = doc(db, "users", currentProfile.uid, "blocks", otherMember.userId);
+      await setDoc(blockRef, {
+        blocked: true,
+        blockedAt: serverTimestamp()
+      });
+    } catch (err) {
+      console.error("Error blocking user: ", err);
+    }
+  };
+
+  const handleUnblockUserFromBanner = async () => {
+    if (!otherMember) return;
+    try {
+      const blockRef = doc(db, "users", currentProfile.uid, "blocks", otherMember.userId);
+      await deleteDoc(blockRef);
+    } catch (err) {
+      console.error("Error unblocking user: ", err);
+    }
+  };
 
   // 1. Subscribe to Chat Metadata
   useEffect(() => {
@@ -375,19 +462,27 @@ export default function ActiveChatWindow({
   );
 
   return (
-    <div className="flex flex-1 flex-col bg-white overflow-hidden h-full">
+    <div className={`flex flex-1 flex-col overflow-hidden h-full transition-colors duration-200 ${
+      isDark ? "bg-[#09090b] text-white" : "bg-white text-[#2D1B08]"
+    }`}>
       {/* Top Banner Control bar */}
-      <div className="flex h-20 items-center justify-between border-b border-[#E8E1D5] bg-white px-8">
+      <div className={`flex h-20 items-center justify-between border-b px-8 transition-colors duration-200 ${
+        isDark ? "border-zinc-800 bg-[#0c0c0e]" : "border-[#E8E1D5] bg-white"
+      }`}>
         <div className="flex items-center space-x-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#F5F1EB] border border-[#E8E1D5] text-[#7B3F00] font-bold font-sans">
+          <div className={`flex h-10 w-10 items-center justify-center rounded-xl font-bold font-sans border ${
+            isDark ? "bg-zinc-900 border-zinc-750 text-white" : "bg-[#F5F1EB] border-[#E8E1D5] text-[#7B3F00]"
+          }`}>
             {isGroup ? (
-              <Users className="h-5 w-5 text-[#7B3F00]" />
+              <Users className={`h-5 w-5 ${isDark ? "text-white" : "text-[#7B3F00]"}`} />
             ) : (
               members.find((m) => m.userId !== currentProfile.uid)?.displayName[0] || "@"
             )}
           </div>
           <div>
-            <h3 className="text-sm font-bold font-sans text-gray-800 tracking-tight">{getChatDisplayName()}</h3>
+            <h3 className={`text-sm font-bold font-sans tracking-tight ${
+              isDark ? "text-zinc-100" : "text-gray-800"
+            }`}>{getChatDisplayName()}</h3>
             <span className="text-[10px] text-green-500 font-semibold block mt-0.5">
               {isGroup ? `${members.length} Members` : "Direct encrypted chat"}
             </span>
@@ -402,22 +497,81 @@ export default function ActiveChatWindow({
               }
             }}
             title="Enable native push notifications"
-            className="flex items-center justify-center rounded-lg p-2.5 border border-[#E8E1D5] text-gray-500 hover:bg-gray-50 transition"
+            className={`flex items-center justify-center rounded-lg p-2.5 border transition ${
+              isDark 
+                ? "border-zinc-700 text-zinc-300 hover:bg-zinc-800 hover:text-white" 
+                : "border-[#E8E1D5] text-gray-500 hover:bg-gray-50"
+            }`}
           >
             <BellRing className="h-4 w-4" />
           </button>
 
           <button
             onClick={() => setShowSettings(!showSettings)}
-            className="flex items-center justify-center rounded-lg p-2.5 border border-[#E8E1D5] text-gray-500 hover:bg-gray-50 transition"
+            className={`flex items-center justify-center rounded-lg p-2.5 border transition ${
+              isDark 
+                ? "border-zinc-700 text-zinc-300 hover:bg-zinc-800 hover:text-white" 
+                : "border-[#E8E1D5] text-gray-500 hover:bg-gray-50"
+            }`}
           >
             <Settings className="h-4 w-4" />
           </button>
         </div>
       </div>
 
+      {/* KakaoTalk Unrecognized Sender Banner */}
+      {otherMember && !isFriend && !isBlocked && (
+        <div className={`flex flex-col sm:flex-row items-center justify-between px-6 py-4.5 border-b shadow-xs gap-3 select-none ${
+          isDark 
+            ? "bg-amber-950/20 border-amber-900/30 text-amber-200" 
+            : "bg-[#FFEB33] border-[#7B3F00]/10 text-amber-950"
+        }`}>
+          <div className="flex items-center space-x-3 text-center sm:text-left">
+            <ShieldAlert className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400 animate-pulse" />
+            <div className="text-xs">
+              <span className="font-extrabold block sm:inline">Unrecognized Sender Warning!</span>{" "}
+              <span className="opacity-80">This person is not in your local Friend Contacts. Be careful about sending them links or credentials.</span>
+            </div>
+          </div>
+          <div className="flex items-center space-x-2 w-full sm:w-auto justify-center">
+            <button
+              onClick={handleAddFriendFromBanner}
+              className="flex-1 sm:flex-initial flex items-center justify-center space-x-1 px-4 py-2 bg-[#7B3F00] text-amber-50 hover:bg-[#5C2E00] text-[11px] font-black rounded-full shadow-3xs hover:scale-102 active:scale-98 transition cursor-pointer"
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              <span>Add Friend</span>
+            </button>
+            <button
+              onClick={handleBlockUserFromBanner}
+              className="flex-1 sm:flex-initial flex items-center justify-center space-x-1 px-4 py-2 bg-red-650 text-white hover:bg-red-700 text-[11px] font-black rounded-full shadow-3xs hover:scale-102 active:scale-98 transition cursor-pointer"
+            >
+              <UserMinus className="h-3.5 w-3.5" />
+              <span>Block User</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Blocked Sender Indicator banner */}
+      {otherMember && isBlocked && (
+        <div className="flex items-center justify-between px-6 py-3 border-b text-xs select-none bg-red-50 text-red-800 dark:bg-red-950/20 dark:border-red-900/30 dark:text-red-300">
+          <div className="flex items-center space-x-2.5">
+            <X className="h-4 w-4 shrink-0 text-red-500" />
+            <span>You have blocked this contact. Messages from them are muted.</span>
+          </div>
+          <button
+            onClick={handleUnblockUserFromBanner}
+            className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-[10px] font-bold rounded-xl transition cursor-pointer"
+          >
+            Unblock Contacts
+          </button>
+        </div>
+      )}
+
       {/* Primary Message Stream Body */}
-      <div className="flex-1 overflow-y-auto p-8 space-y-6 bg-[#FDFBF7]">
+      <div className={`flex-1 overflow-y-auto p-8 space-y-6 transition-colors duration-200 ${
+        isDark ? "bg-[#121214]" : "bg-[#FDFBF7]"
+      }`}>
         {messages.map((msg, index) => {
           const isMe = msg.senderId === currentProfile.uid;
           
@@ -435,13 +589,17 @@ export default function ActiveChatWindow({
                   src={msg.senderPhoto}
                   referrerPolicy="no-referrer"
                   alt={msg.senderName}
-                  className="h-8 w-8 rounded-lg object-cover border border-[#E8E1D5] bg-white shrink-0"
+                  className={`h-8 w-8 rounded-lg object-cover border shrink-0 ${
+                    isDark ? "border-zinc-700 bg-zinc-800" : "border-[#E8E1D5] bg-white"
+                  }`}
                 />
               )}
 
               <div className="max-w-[70%]">
                 {!isMe && (
-                  <span className="text-[10px] font-sans font-bold text-gray-400 ml-1 mb-1 block">
+                  <span className={`text-[10px] font-sans font-bold ml-1 mb-1 block ${
+                    isDark ? "text-zinc-500" : "text-gray-400"
+                  }`}>
                     {msg.senderName}
                   </span>
                 )}
@@ -449,7 +607,9 @@ export default function ActiveChatWindow({
                 <div className={`p-3 rounded-2xl shadow-xs border ${
                   isMe 
                     ? "bg-[#7B3F00] text-white border-transparent rounded-tr-none" 
-                    : "bg-white text-gray-700 border-[#E8E1D5] rounded-tl-none"
+                    : isDark 
+                      ? "bg-zinc-900 text-zinc-100 border-zinc-800 rounded-tl-none" 
+                      : "bg-white text-gray-700 border-[#E8E1D5] rounded-tl-none"
                 }`}>
                   {msg.photoUrl ? (
                     <div className="rounded-lg overflow-hidden border border-[#E8E1D5] max-w-[220px] p-0.5 bg-white">
@@ -481,38 +641,52 @@ export default function ActiveChatWindow({
       </div>
 
       {/* Bottom Message Input Panel bar */}
-      <footer className="p-6 bg-white border-t border-[#E8E1D5]">
-        <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto flex items-center space-x-4">
-          <label className="p-2 text-gray-400 hover:text-[#7B3F00] transition cursor-pointer">
-            <Image className="h-6 w-6" />
-            <input
-              type="file"
-              accept="image/*"
-              onChange={handleSendPhoto}
-              className="hidden"
-            />
-          </label>
-
-          <div className="flex-1 bg-[#F5F1EB] rounded-full px-6 py-3 border border-transparent focus-within:border-[#7B3F00] focus-within:bg-white transition-all flex items-center">
-            <input
-              type="text"
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              placeholder="Type a message..."
-              className="bg-transparent text-sm w-full outline-none text-gray-800 placeholder:text-gray-400"
-            />
+      <footer className={`p-6 transition-colors duration-200 ${
+        isDark ? "bg-[#09090b] border-t border-zinc-850" : "bg-white border-t border-[#E8E1D5]"
+      }`}>
+        {isBlocked ? (
+          <div className="max-w-4xl mx-auto py-3 px-6 text-center text-xs font-bold text-red-650 bg-red-50/60 dark:bg-red-950/20 rounded-2xl border border-red-200/50 flex items-center justify-center space-x-2">
+            <span>🚫 Chat is locked because you have blocked this contact. Unblock them to resume conversations.</span>
           </div>
+        ) : (
+          <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto flex items-center space-x-4">
+            <label className="p-2 text-gray-400 hover:text-[#7B3F00] transition cursor-pointer">
+              <Image className="h-6 w-6" />
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleSendPhoto}
+                className="hidden"
+              />
+            </label>
 
-          <button
-            type="submit"
-            disabled={sending || !inputText.trim()}
-            className="w-12 h-12 bg-[#7B3F00] hover:bg-[#5C2E00] rounded-full flex items-center justify-center text-white shadow-lg transition-transform hover:scale-105 active:scale-95 shrink-0 outline-none disabled:opacity-40"
-          >
-            <svg className="w-5 h-5 transform rotate-90" fill="currentColor" viewBox="0 0 20 20">
-              <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z"></path>
-            </svg>
-          </button>
-        </form>
+            <div className={`flex-1 rounded-full px-6 py-3 border transition-all flex items-center ${
+              isDark 
+                ? "bg-[#18181b] border-zinc-800 focus-within:border-zinc-650 focus-within:bg-[#000000]" 
+                : "bg-[#F5F1EB] border-transparent focus-within:border-[#7B3F00] focus-within:bg-white"
+            }`}>
+              <input
+                type="text"
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                placeholder="Type a message..."
+                className={`bg-transparent text-sm w-full outline-none ${
+                  isDark ? "text-zinc-100 placeholder:text-zinc-500" : "text-gray-800 placeholder:text-gray-400"
+                }`}
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={sending || !inputText.trim()}
+              className="w-12 h-12 bg-[#7B3F00] hover:bg-[#5C2E00] rounded-full flex items-center justify-center text-white shadow-lg transition-transform hover:scale-105 active:scale-95 shrink-0 outline-none disabled:opacity-40"
+            >
+              <svg className="w-5 h-5 transform rotate-90" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z"></path>
+              </svg>
+            </button>
+          </form>
+        )}
       </footer>
 
       {/* Chat Settings overlay drawpanel */}
