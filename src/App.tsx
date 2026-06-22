@@ -3,14 +3,15 @@ import {
   auth, db, handleFirestoreError, OperationType 
 } from "./firebase";
 import { 
-  createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged 
+  createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged,
+  GoogleAuthProvider, signInWithPopup
 } from "firebase/auth";
 import { 
   doc, getDoc, setDoc, collection, onSnapshot, 
   serverTimestamp, writeBatch, getDocs, addDoc, query, where, deleteDoc
 } from "firebase/firestore";
 import { 
-  MessageSquare, Users, UserPlus, LogOut, ChevronRight, 
+  MessageSquare, Users, UserPlus, LogOut, ChevronRight, FolderClosed,
   MessageCircle, Sparkles, Smile, RefreshCw, UserCheck, ShieldCheck, Search, Megaphone, UserX, ShieldAlert, BellRing, Trash
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
@@ -20,6 +21,16 @@ import GroupChatModal from "./components/GroupChatModal";
 import ProfileModal from "./components/ProfileModal";
 import ActiveChatWindow from "./components/ActiveChatWindow";
 import AdminConsole from "./components/AdminConsole";
+import AllFilesView from "./components/AllFilesView";
+
+const generateSweetID = () => {
+  const flavors = ["Dark", "Milk", "Cocoa", "Sweet", "Fudge", "Choco", "Truffle", "Choc", "Praline", "Mocha", "Hazel", "Mint", "Matcha", "Berry", "Honey"];
+  const structures = ["Ganache", "Bar", "Cup", "Bite", "Bean", "Nibs", "Syrup", "Melt", "Kiss", "Cake", "Swirl", "Cookie", "Wafer", "Bonbon"];
+  const randomFlavor = flavors[Math.floor(Math.random() * flavors.length)];
+  const randomStructure = structures[Math.floor(Math.random() * structures.length)];
+  const randomSuffix = Math.floor(1000 + Math.random() * 9000).toString(); // 4-digit number
+  return `${randomFlavor}-${randomStructure}-${randomSuffix}`.toUpperCase();
+};
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -39,6 +50,7 @@ export default function App() {
 
   // Authentication Form States
   const [signName, setSignName] = useState("");
+  const [signEmail, setSignEmail] = useState("");
   const [signPassword, setSignPassword] = useState("");
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authError, setAuthError] = useState("");
@@ -52,6 +64,22 @@ export default function App() {
 
   // Announcement Toast Overlay States
   const [activeAnnouncement, setActiveAnnouncement] = useState<{ id: string; text: string; type: "ios" | "android" | "global" } | null>(null);
+
+  // Routing and Address Bar History Sync
+  const [currentPath, setCurrentPath] = useState(window.location.pathname);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentPath(window.location.pathname);
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  const navigateTo = (path: string) => {
+    window.history.pushState(null, "", path);
+    setCurrentPath(path);
+  };
 
   // 1. Subscribe to Authentication State changes
   useEffect(() => {
@@ -73,13 +101,47 @@ export default function App() {
           }
         });
 
+        // Real-time Announcements Listener (iOS/Android alerts) - Runs only for authenticated users!
+        if (!unsubAnnouncements) {
+          const announcementsRef = collection(db, "announcements");
+          unsubAnnouncements = onSnapshot(announcementsRef, (snap) => {
+            if (!snap.empty) {
+              const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
+              docs.sort((a,b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+              const latest = docs[0];
+              
+              if (latest && latest.text) {
+                const shownId = localStorage.getItem("last_shown_ann_id");
+                if (shownId !== latest.id) {
+                  localStorage.setItem("last_shown_ann_id", latest.id);
+                  setActiveAnnouncement({
+                    id: latest.id,
+                    text: latest.text,
+                    type: latest.type || "global"
+                  });
+                  setTimeout(() => {
+                    setActiveAnnouncement(null);
+                  }, 8000);
+                }
+              }
+            }
+          }, (error) => {
+            console.warn("Announcements subscription: Missing or restricted permissions:", error);
+          });
+        }
+
         // Determine Admin Status
         const emailLower = (user.email || "").toLowerCase();
         const uidLower = (user.uid || "").toLowerCase();
         const userIsAdmin = emailLower === "jaein8080@gmail.com" || uidLower === "jaein8080" || uidLower === "jaein8080@gmail.com";
         setIsAdmin(userIsAdmin);
 
-        await initUserProfile(user);
+        try {
+          await initUserProfile(user);
+        } catch (initErr: any) {
+          console.error("Profile setup failed on state change:", initErr);
+          setAuthError(`Profile initialization failed: ${initErr.message || initErr}`);
+        }
       } else {
         setCurrentUser(null);
         setProfile(null);
@@ -91,33 +153,12 @@ export default function App() {
           unsubBan();
           unsubBan = null;
         }
-      }
-      setAuthenticating(false);
-    });
-
-    // Real-time Announcements Listener (iOS/Android alerts)
-    const announcementsRef = collection(db, "announcements");
-    unsubAnnouncements = onSnapshot(announcementsRef, (snap) => {
-      if (!snap.empty) {
-        const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
-        docs.sort((a,b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
-        const latest = docs[0];
-        
-        if (latest && latest.text) {
-          const shownId = localStorage.getItem("last_shown_ann_id");
-          if (shownId !== latest.id) {
-            localStorage.setItem("last_shown_ann_id", latest.id);
-            setActiveAnnouncement({
-              id: latest.id,
-              text: latest.text,
-              type: latest.type || "global"
-            });
-            setTimeout(() => {
-              setActiveAnnouncement(null);
-            }, 8000);
-          }
+        if (unsubAnnouncements) {
+          unsubAnnouncements();
+          unsubAnnouncements = null;
         }
       }
+      setAuthenticating(false);
     });
 
     return () => {
@@ -130,47 +171,57 @@ export default function App() {
   // 2. Initialize or fetch current user record
   const initUserProfile = async (user: any) => {
     setProfileSetupLoading(true);
-    const userRef = doc(db, "users", user.uid);
-    let userSnap;
     try {
-      userSnap = await getDoc(userRef);
-    } catch (err) {
-      console.error("Profile synchronization: Fetching profile failed:", err);
-      handleFirestoreError(err, OperationType.GET, `users/${user.uid}`);
-      return;
-    }
+      const userRef = doc(db, "users", user.uid);
+      const userSnap = await getDoc(userRef);
 
-    if (userSnap.exists()) {
-      const d = userSnap.data();
+      const userEmail = user.email || "";
+
+      if (userSnap.exists()) {
+        const d = userSnap.data();
+        const profileData: UserProfile = {
+          uid: d.uid,
+          displayName: d.displayName,
+          photoURL: d.photoURL,
+          uniqueId: d.uniqueId,
+          createdAt: d.createdAt,
+          email: d.email || userEmail,
+        };
+        // If the email field isn't saved in database yet, update it
+        if (!d.email && userEmail) {
+          await setDoc(userRef, { email: userEmail }, { merge: true });
+        }
+        setProfile(profileData);
+      } else {
+        // Generate a sweet custom chocolate flavor profile ID
+        const generatedId = generateSweetID();
+        
+        const freshProfile: UserProfile = {
+          uid: user.uid,
+          displayName: user.displayName || "Sweet Chocolatier",
+          photoURL: user.photoURL || "https://images.unsplash.com/photo-1511381939415-e44015466834?w=150&auto=format&fit=crop",
+          uniqueId: generatedId,
+          createdAt: serverTimestamp(),
+          email: userEmail,
+        };
+
+        await setDoc(userRef, freshProfile);
+        setProfile(freshProfile);
+      }
+    } catch (err: any) {
+      console.error("Profile synchronization: init failed:", err);
+      // Fallback with local details to prevent blocking login
       setProfile({
-        uid: d.uid,
-        displayName: d.displayName,
-        photoURL: d.photoURL,
-        uniqueId: d.uniqueId,
-        createdAt: d.createdAt,
-      });
-      setProfileSetupLoading(false);
-    } else {
-      // Generate an unchangeable unique 8-digit identification ID
-      const generatedId = Math.floor(10000000 + Math.random() * 90000000).toString();
-      
-      const freshProfile: UserProfile = {
         uid: user.uid,
         displayName: user.displayName || "Sweet Chocolatier",
         photoURL: user.photoURL || "https://images.unsplash.com/photo-1511381939415-e44015466834?w=150&auto=format&fit=crop",
-        uniqueId: generatedId,
-        createdAt: serverTimestamp(),
-      };
-
-      try {
-        await setDoc(userRef, freshProfile);
-        setProfile(freshProfile);
-      } catch (err) {
-        console.error("Profile synchronization: Creating profile failed:", err);
-        handleFirestoreError(err, OperationType.CREATE, `users/${user.uid}`);
-      } finally {
-        setProfileSetupLoading(false);
-      }
+        uniqueId: "--------",
+        createdAt: null,
+        email: user.email || ""
+      });
+      setAuthError(`Profile loaded locally. Database access might be limited: ${err.message || err}`);
+    } finally {
+      setProfileSetupLoading(false);
     }
   };
 
@@ -242,16 +293,70 @@ export default function App() {
     return `${norm}@chocolatetalk.local`;
   };
 
+  const handleGoogleSignIn = async () => {
+    const provider = new GoogleAuthProvider();
+    setIsSigningIn(true);
+    setAuthError("");
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (err: any) {
+      console.error("Google login failed:", err);
+      if (err.code === "auth/popup-closed-by-user") {
+        setAuthError("Sign-in popup closed before completion.");
+      } else if (err.code === "auth/blocked-by-popup-killer") {
+        setAuthError("Sign-in popup blocked by browser. Please allow popups for this site.");
+      } else {
+        setAuthError(err.message || "Sign in with Google failed!");
+      }
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
   const handlePasswordLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!signName.trim() || !signPassword.trim()) {
+    const cleanNick = signName.trim();
+    if (!cleanNick || !signPassword.trim()) {
       setAuthError("Please fill in all credentials!");
       return;
     }
+
     setAuthError("");
     setIsSigningIn(true);
     try {
-      const email = getEmailFromUsername(signName);
+      let email = "";
+      if (cleanNick.includes("@")) {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(cleanNick)) {
+          setAuthError("Please enter a valid email address!");
+          setIsSigningIn(false);
+          return;
+        }
+        email = cleanNick.toLowerCase();
+      } else {
+        // Look up mapped email address in the usernames collection to support nickname login with real email accounts
+        const normalized = cleanNick.toLowerCase();
+        const usernameDocRef = doc(db, "usernames", normalized);
+        let usernameSnap = null;
+        try {
+          usernameSnap = await getDoc(usernameDocRef);
+        } catch (dbErr: any) {
+          console.warn("Username database lookup failed, calling fallback mapping:", dbErr);
+        }
+
+        if (usernameSnap && usernameSnap.exists()) {
+          const uData = usernameSnap.data();
+          if (uData && uData.email) {
+            email = uData.email;
+          } else {
+            email = getEmailFromUsername(cleanNick);
+          }
+        } else {
+          // Backward compatibility fallback
+          email = getEmailFromUsername(cleanNick);
+        }
+      }
+
       await signInWithEmailAndPassword(auth, email, signPassword);
       setSignName("");
       setSignPassword("");
@@ -270,64 +375,118 @@ export default function App() {
   const handlePasswordRegister = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const cleanNick = signName.trim();
-    if (!cleanNick || !signPassword.trim()) {
-      setAuthError("Please fill in all credentials!");
+    const cleanEmail = signEmail.trim();
+
+    if (!cleanNick || !cleanEmail || !signPassword.trim()) {
+      setAuthError("Please fill in all fields (Username, Email, and Password)!");
       return;
     }
     if (cleanNick.length < 3) {
       setAuthError("Username must be at least 3 characters!");
       return;
     }
+
+    // Direct Alphanumeric Check on Display Name
+    const usernameRegex = /^[a-zA-Z0-9_\-]+$/;
+    if (!usernameRegex.test(cleanNick)) {
+      setAuthError("Username can only contain alphanumeric letters, numbers, underscores, and hyphens (no spaces or @ characters).");
+      return;
+    }
+
+    // Direct Email Syntax check
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      setAuthError("Please enter a valid format for your Email address!");
+      return;
+    }
+
     setAuthError("");
     setIsSigningIn(true);
     try {
-      // 1. Check if name is already registered/used!
+      // Step 1: Pre-verify username uniqueness in database
       const normalized = cleanNick.toLowerCase();
       const usernameDocRef = doc(db, "usernames", normalized);
-      const usernameSnap = await getDoc(usernameDocRef);
-      if (usernameSnap.exists()) {
-        setAuthError("This name is already used! Choose another name.");
+      let usernameSnap = null;
+      try {
+        usernameSnap = await getDoc(usernameDocRef);
+      } catch (getDocError: any) {
+        console.error("Uniqueness lookup failed with error:", getDocError);
+        setAuthError(`Uniqueness lookup denied: ${getDocError.message || getDocError}`);
         setIsSigningIn(false);
         return;
       }
 
-      // 2. Map username to local email
-      const email = getEmailFromUsername(cleanNick);
+      if (usernameSnap && usernameSnap.exists()) {
+        setAuthError("This username is already used! Please choose another name.");
+        setIsSigningIn(false);
+        return;
+      }
 
-      // 3. Create Firebase auth record
-      const credential = await createUserWithEmailAndPassword(auth, email, signPassword);
+      // Step 2: Attempt standard Firebase auth record creation
+      let credential;
+      try {
+        credential = await createUserWithEmailAndPassword(auth, cleanEmail, signPassword);
+      } catch (authErr: any) {
+        console.error("Auth user registration failed:", authErr);
+        if (authErr.code === "auth/email-already-in-use") {
+          setAuthError("This email address is already registered or in use!");
+        } else if (authErr.code === "auth/weak-password") {
+          setAuthError("Password is too weak! Try a longer password.");
+        } else {
+          setAuthError(`Auth registration error: ${authErr.message || authErr}`);
+        }
+        setIsSigningIn(false);
+        return;
+      }
+
       const user = credential.user;
 
-      // 4. Set Username Uniqueness lock in database
-      await setDoc(usernameDocRef, {
-        uid: user.uid,
-        createdAt: serverTimestamp()
-      });
+      // Step 3: Set Username Lock document synchronously after creation
+      try {
+        await setDoc(usernameDocRef, {
+          uid: user.uid,
+          email: cleanEmail,
+          createdAt: serverTimestamp()
+        });
+      } catch (setDocUsernameError: any) {
+        console.error("Setting username unique lock failed:", setDocUsernameError);
+        setAuthError(`Username unique-lock write failed: ${setDocUsernameError.message || setDocUsernameError}`);
+        setIsSigningIn(false);
+        return;
+      }
 
-      // 5. Initialize user record
+      // Step 4: Set the central user profile document
       const userRef = doc(db, "users", user.uid);
-      const generatedId = Math.floor(10000000 + Math.random() * 90000000).toString();
+      const generatedId = generateSweetID();
       
       const freshProfile: UserProfile = {
         uid: user.uid,
-        displayName: cleanNick, // Use exact casing typed
+        displayName: cleanNick,
         photoURL: "https://images.unsplash.com/photo-1511381939415-e44015466834?w=150&auto=format&fit=crop",
         uniqueId: generatedId,
         createdAt: serverTimestamp(),
       };
 
-      await setDoc(userRef, freshProfile);
-      setProfile(freshProfile);
-      
-      // Clear fields
+      try {
+        await setDoc(userRef, freshProfile);
+        setProfile(freshProfile);
+      } catch (setDocUserError: any) {
+        console.error("Setting user profile failed:", setDocUserError);
+        setAuthError(`Profile document registration failed: ${setDocUserError.message || setDocUserError}`);
+        setIsSigningIn(false);
+        return;
+      }
+
+      // Successful Registration cleanup
       setSignName("");
+      setSignEmail("");
       setSignPassword("");
     } catch (err: any) {
-      console.error(err);
-      if (err.code === "auth/email-already-in-use" || err.code === "auth/username-already-in-use" || err?.message?.includes("already")) {
-        setAuthError("This name is already used! Choose another name.");
+      console.error("Unhandled registration error branch:", err);
+      if (err.code === "auth/email-already-in-use" || err?.message?.includes("already")) {
+        setAuthError("This account registration is already used.");
       } else {
-        setAuthError(err.message || "Registration failed!");
+        setAuthError(err.message || "Registration encountered an unexpected issue.");
       }
     } finally {
       setIsSigningIn(false);
@@ -468,85 +627,39 @@ export default function App() {
               Real-time messaging using durable Firebase engines. Exchange persistent friends list, photos, group invites, and secure camera verification.
             </p>
 
-          <div className="flex flex-col items-center space-y-4 w-full">
-            {/* Login / Register Toggle Tabs */}
-            <div className="flex w-full bg-[#F5F1EB] p-1 rounded-xl border border-[#E8E1D5] leading-none mb-1">
-              <button
-                type="button"
-                onClick={() => { setAuthMode("login"); setAuthError(""); }}
-                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition ${
-                  authMode === "login" 
-                    ? "bg-[#7B3F00] text-amber-50 shadow-xs" 
-                    : "text-gray-500 hover:text-gray-800"
-                }`}
-              >
-                Log In
-              </button>
-              <button
-                type="button"
-                onClick={() => { setAuthMode("register"); setAuthError(""); }}
-                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition ${
-                  authMode === "register" 
-                    ? "bg-[#7B3F00] text-amber-50 shadow-xs" 
-                    : "text-gray-500 hover:text-gray-800"
-                }`}
-              >
-                Register
-              </button>
-            </div>
+          <div className="flex flex-col items-center space-y-4 w-full pt-2">
+            {authError && (
+              <div className="text-[10px] text-red-600 bg-red-50 border border-red-200 p-2.5 rounded-xl font-sans font-semibold text-center leading-normal w-full">
+                ⚠️ {authError}
+              </div>
+            )}
 
-            {/* Credentials Fields Form */}
-            <form 
-              onSubmit={authMode === "login" ? handlePasswordLogin : handlePasswordRegister} 
-              className="w-full space-y-3"
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={isSigningIn}
+              className="w-full flex items-center justify-center space-x-2.5 rounded-2xl border border-[#E8E1D5] bg-white hover:bg-[#FDFCFB] text-[#2D1B08] py-4 text-sm font-bold shadow-md transition-all sm:hover:scale-[1.01] active:scale-[0.98] outline-none disabled:opacity-50 cursor-pointer"
             >
-              <div className="space-y-1 text-left">
-                <label className="block text-[9px] font-bold text-gray-500 uppercase tracking-wider font-mono">
-                  Username / Name
-                </label>
-                <input
-                  type="text"
-                  placeholder={authMode === "login" ? "Enter your name..." : "Choose a name..."}
-                  value={signName}
-                  onChange={(e) => setSignName(e.target.value)}
-                  required
-                  autoCapitalize="none"
-                  className="w-full text-xs p-3 rounded-xl border border-[#E8E1D5] bg-white focus:outline-none focus:border-[#7B3F00] text-[#2C1B08]"
+              <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24">
+                <path
+                  fill="#4285F4"
+                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
                 />
-              </div>
-
-              <div className="space-y-1 text-left">
-                <label className="block text-[9px] font-bold text-gray-500 uppercase tracking-wider font-mono">
-                  Password
-                </label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  value={signPassword}
-                  onChange={(e) => setSignPassword(e.target.value)}
-                  required
-                  className="w-full text-xs p-3 rounded-xl border border-[#E8E1D5] bg-white focus:outline-none focus:border-[#7B3F00] text-[#2C1B08]"
+                <path
+                  fill="#34A853"
+                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
                 />
-              </div>
-
-              {authError && (
-                <div className="text-[10px] text-red-600 bg-red-50 border border-red-200 p-2.5 rounded-xl font-sans font-semibold text-center leading-normal">
-                  ⚠️ {authError}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={isSigningIn}
-                className="w-full flex items-center justify-center space-x-2 rounded-2xl bg-[#7B3F00] hover:bg-[#5C2E00] text-white py-3.5 text-xs font-bold shadow-md transition leading-none outline-none disabled:bg-gray-200 cursor-pointer"
-              >
-                {isSigningIn ? (
-                  <span>Wait a moment...</span>
-                ) : (
-                  <span>{authMode === "login" ? "Chocolatier Sign In" : "Register New Account"}</span>
-                )}
-              </button>
-            </form>
+                <path
+                  fill="#FBBC05"
+                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                />
+                <path
+                  fill="#EA4335"
+                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                />
+              </svg>
+              <span>{isSigningIn ? "Signing you in..." : "Continue with Google"}</span>
+            </button>
           </div>
           </div>
         </motion.div>
@@ -555,7 +668,7 @@ export default function App() {
   }
   // Logged-in application space layout Dashboard
   return (
-    <div className="min-h-screen bg-[#F9F7F2] flex flex-col p-3 md:p-5 items-center justify-center relative overflow-hidden">
+    <div className="h-screen w-screen bg-white flex flex-col relative overflow-hidden">
       
       {/* Real-time iOS / Android Notification Alert toasts */}
       <AnimatePresence>
@@ -634,7 +747,15 @@ export default function App() {
         </div>
       )}
 
-      <div className="w-full max-w-5xl h-[85vh] bg-white rounded-[2rem] border border-[#E8E1D5] flex overflow-hidden shadow-xl">
+      {currentPath.endsWith("/all") ? (
+        <AllFilesView
+          currentUser={currentUser}
+          profile={profile}
+          joinedChats={joinedChats}
+          onNavigateBack={() => navigateTo("/")}
+        />
+      ) : (
+        <div className="w-full h-full bg-white flex overflow-hidden">
         
         {/* Left Side: Sidebar Column */}
         <div className="w-80 border-r border-[#E8E1D5] flex flex-col justify-between bg-white">
@@ -684,6 +805,30 @@ export default function App() {
           {/* Center Scroll Workspace: Friends & Conversations */}
           <div className="flex-1 overflow-y-auto py-2 space-y-6">
             
+            {/* 📂 Central File Vault Redirect Button */}
+            <div className="px-6 pt-1">
+              <button
+                id="all-files-navigator-btn"
+                onClick={() => navigateTo("/all")}
+                className="w-full flex items-center justify-between bg-[#FAF6F0] hover:bg-[#7B3F00]/5 border border-[#E8E1D5] hover:border-[#7B3F00] text-left rounded-xl p-3.5 transition group cursor-pointer"
+              >
+                <div className="flex items-center space-x-3">
+                  <div className="h-8 w-8 bg-[#7B3F00] rounded-lg flex items-center justify-center text-white shadow-xs group-hover:scale-105 transition shrink-0">
+                    <FolderClosed className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="block font-sans font-bold text-xs text-[#2D1B08] group-hover:text-[#7B3F00] transition leading-none truncate">
+                      Talk Files Archive
+                    </span>
+                    <span className="block text-[8px] font-mono font-bold text-[#7B3F00] uppercase tracking-wider mt-1 select-none leading-none">
+                      /all website lists
+                    </span>
+                  </div>
+                </div>
+                <ChevronRight className="h-4 w-4 text-gray-400 group-hover:text-[#7B3F00] group-hover:translate-x-0.5 transition shrink-0" />
+              </button>
+            </div>
+
             {/* Friends Registry list */}
             <div>
               <div className="flex items-center justify-between px-6 mb-2">
@@ -857,6 +1002,8 @@ export default function App() {
         </div>
 
       </div>
+
+      )}
 
       {/* MODAL LIGHTBOXES */}
       <AnimatePresence>

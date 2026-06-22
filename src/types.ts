@@ -4,6 +4,7 @@ export interface UserProfile {
   photoURL: string;
   uniqueId: string; // Unchangeable 8-digit ID
   createdAt: any;
+  email?: string;
 }
 
 export interface Friend {

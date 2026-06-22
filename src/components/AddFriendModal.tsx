@@ -21,9 +21,9 @@ export default function AddFriendModal({ currentUserId, onClose, onFriendAdded }
   const [success, setSuccess] = useState(false);
 
   const handleSearch = async (codeToSearch?: string) => {
-    const idToQuery = codeToSearch || targetId.trim();
-    if (!/^\d{8}$/.test(idToQuery)) {
-      setErrorMessage("ID must be exactly an 8-digit number.");
+    const idToQuery = (codeToSearch || targetId).trim();
+    if (!idToQuery) {
+      setErrorMessage("Please enter a search term.");
       return;
     }
 
@@ -33,15 +33,54 @@ export default function AddFriendModal({ currentUserId, onClose, onFriendAdded }
     setSuccess(false);
 
     try {
-      const q = query(collection(db, "users"), where("uniqueId", "==", idToQuery));
-      const querySnapshot = await getDocs(q);
+      let foundDoc: any = null;
 
-      if (querySnapshot.empty) {
-        setErrorMessage("No user found with this chocolate ID.");
+      // 1. Try querying uniqueId directly (universal string match for old 8-digit or new sweet IDs)
+      const qId = query(collection(db, "users"), where("uniqueId", "==", idToQuery.toUpperCase()));
+      const snapId = await getDocs(qId);
+      if (!snapId.empty) {
+        foundDoc = snapId.docs[0];
+      }
+
+      // 2. Try querying email directly
+      if (!foundDoc) {
+        const qEmail = query(collection(db, "users"), where("email", "==", idToQuery));
+        const snapEmail = await getDocs(qEmail);
+        if (!snapEmail.empty) {
+          foundDoc = snapEmail.docs[0];
+        }
+      }
+
+      // 3. Fallback scan / search by nickname / display name or email prefix
+      if (!foundDoc) {
+        const inputLower = idToQuery.toLowerCase();
+        const usersSnap = await getDocs(collection(db, "users"));
+        const match = usersSnap.docs.find(d => {
+          const uData = d.data();
+          const email = (uData.email || "").toLowerCase();
+          const dispName = (uData.displayName || "").toLowerCase();
+          const uniqueId = (uData.uniqueId || "").toLowerCase();
+          const emailPrefix = email.split("@")[0];
+
+          return (
+            email === inputLower ||
+            emailPrefix === inputLower ||
+            dispName === inputLower ||
+            dispName.includes(inputLower) ||
+            uniqueId === inputLower
+          );
+        });
+        if (match) {
+          foundDoc = match;
+        }
+      }
+
+      if (!foundDoc) {
+        setErrorMessage("No user found with this chocolate ID, Gmail, or nickname.");
       } else {
-        const docData = querySnapshot.docs[0].data();
+        const docData = foundDoc.data();
         if (docData.uid === currentUserId) {
-          setErrorMessage("That is you! Try scanning a friend's ID.");
+          setErrorMessage("That is you!");
         } else {
           setFoundUser({
             uid: docData.uid,
@@ -49,10 +88,11 @@ export default function AddFriendModal({ currentUserId, onClose, onFriendAdded }
             photoURL: docData.photoURL,
             uniqueId: docData.uniqueId,
             createdAt: docData.createdAt,
+            email: docData.email || "",
           });
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
       setErrorMessage("Failed to search. Check configuration.");
     } finally {
@@ -113,7 +153,7 @@ export default function AddFriendModal({ currentUserId, onClose, onFriendAdded }
       >
         {/* Header toolbar */}
         <div className="flex items-center justify-between border-b border-[#E8E1D5] bg-white px-6 py-5">
-          <span className="font-sans font-bold text-base text-[#2D1B08] select-none">Add Friend by Chocolate ID</span>
+          <span className="font-sans font-bold text-base text-[#2D1B08] select-none">Add Friend</span>
           <button
             onClick={onClose}
             className="rounded-full p-1.5 text-gray-400 hover:bg-[#F5F1EB] hover:text-gray-600 transition"
@@ -127,25 +167,25 @@ export default function AddFriendModal({ currentUserId, onClose, onFriendAdded }
           {/* Option 1: Search panel */}
           <div className="flex flex-col space-y-2">
             <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">
-              Type 8-digit User ID
+              Search by Chocolate ID, Gmail, or Nickname
             </label>
             <div className="flex space-x-2">
               <div className="relative flex-1">
                 <input
                   type="text"
-                  maxLength={8}
-                  placeholder="e.g. 52938402"
+                  maxLength={100}
+                  placeholder="e.g. ssohyun33, ssohyun33@gmail.com, or ID"
                   value={targetId}
-                  onChange={(e) => setTargetId(e.target.value.replace(/\D/g, ""))}
+                  onChange={(e) => setTargetId(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                  className="w-full rounded-xl border border-[#E8E1D5] bg-white pl-9.5 pr-3 py-2.5 text-sm text-[#2D1B08] focus:border-[#7B3F00] focus:outline-none font-mono tracking-widest"
+                  className="w-full rounded-xl border border-[#E8E1D5] bg-white pl-9.5 pr-3 py-2.5 text-sm text-[#2D1B08] focus:border-[#7B3F00] focus:outline-none"
                 />
                 <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
               </div>
               <button
                 onClick={() => handleSearch()}
-                disabled={searching || targetId.length !== 8}
-                className="rounded-xl bg-[#7B3F00] px-5 text-sm font-semibold text-white hover:bg-[#5C2E00] disabled:bg-gray-100 disabled:text-gray-400 transition shrink-0"
+                disabled={searching || !targetId.trim()}
+                className="rounded-xl bg-[#7B3F00] px-5 text-sm font-semibold text-white hover:bg-[#5C2E00] disabled:bg-gray-100 disabled:text-gray-400 transition shrink-0 cursor-pointer"
               >
                 {searching ? <RefreshCw className="h-4 w-4 animate-spin" /> : "Search"}
               </button>
