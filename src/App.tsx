@@ -800,8 +800,8 @@ export default function App() {
       }`}>
         
         {/* Left Side: Sidebar Column */}
-        <div className={`w-full md:w-80 border-r flex flex-col justify-between transition-colors duration-200 ${
-          activeChatId ? "hidden md:flex" : "flex"
+        <div className={`w-full md:w-80 border-r flex flex-col justify-between transition-all duration-200 ${
+          activeChatId ? (sidebarCollapsed ? "hidden md:hidden" : "hidden md:flex") : "flex"
         } ${
           theme === "black" ? "bg-black border-zinc-800 text-white" : "bg-white border-[#E8E1D5] text-[#2D1B08]"
         }`}>
@@ -970,8 +970,8 @@ export default function App() {
                             <span className="block font-sans font-bold text-xs leading-tight text-[#2D1B08] group-hover:text-[#7B3F00] truncate">
                               {room.displayName}
                             </span>
-                            <span className="block font-mono text-[8px] text-gray-400 leading-none mt-0.5">
-                              {room.isGroup ? "Group chat" : "Encrypted DM"}
+                            <span className="block font-mono text-[8px] text-gray-400 leading-none mt-0.5 truncate max-w-[170px]" title={room.isGroup ? (chatMembersCache[room.chatId] || "Group Chat") : "Encrypted DM"}>
+                              {room.isGroup ? (chatMembersCache[room.chatId] || "Group chat") : "Encrypted DM"}
                             </span>
                           </div>
                         </div>
@@ -1035,6 +1035,8 @@ export default function App() {
               friendsList={friends}
               onChatDeletedOrLeft={() => setActiveChatId(null)}
               theme={theme}
+              sidebarCollapsed={sidebarCollapsed}
+              onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
             />
           ) : (
             <div className="text-center p-8 flex flex-col items-center space-y-4 choose-prompt select-none">

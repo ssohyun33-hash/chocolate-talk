@@ -2,11 +2,6 @@ rules_version = '2';
 service cloudfirestore {
   match /databases/{database}/documents {
 
-    // 1. Global Safety Net: Default-Deny Catch-All
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
     // --- Global Helper Functions ---
     function isSignedIn() {
       return request.auth != null;
@@ -33,17 +28,21 @@ service cloudfirestore {
 
     // Check if user is the host of the requested chat
     function isHostOfChat(chatId) {
-      return get(/databases/$(database)/documents/chats/$(chatId)).data.hostId == request.auth.uid;
+      return exists(/databases/$(database)/documents/chats/$(chatId))
+        && get(/databases/$(database)/documents/chats/$(chatId)).data.hostId == request.auth.uid;
     }
 
     // Check if user is the system admin
     function isAdmin() {
-      return isSignedIn() && (
-        request.auth.token.email == 'jaein8080@gmail.com'
-        || request.auth.uid == 'jaein8080@gmail.com'
-        || request.auth.uid == 'jaein8080'
-        || request.auth.token.email == 'admin@chocolatetalk.local'
-      );
+      return isSignedIn() 
+        && 'token' in request.auth
+        && 'email' in request.auth.token
+        && (
+          request.auth.token.email == 'jaein8080@gmail.com'
+          || request.auth.uid == 'jaein8080@gmail.com'
+          || request.auth.uid == 'jaein8080'
+          || request.auth.token.email == 'admin@chocolatetalk.local'
+        );
     }
 
     // --- Users Collection ---
@@ -79,7 +78,12 @@ service cloudfirestore {
         allow read, list: if (isSignedIn() && userId == request.auth.uid) || isAdmin();
         
         allow create, update: if isSignedIn() 
-          && (userId == request.auth.uid || exists(/databases/$(database)/documents/chats/$(joinedChatId)/members/$(request.auth.uid)) || joinedChatId.matches('^dm-.*'))
+          && (
+               userId == request.auth.uid 
+               || exists(/databases/$(database)/documents/chats/$(joinedChatId)/members/$(request.auth.uid)) 
+               || existsAfter(/databases/$(database)/documents/chats/$(joinedChatId)/members/$(request.auth.uid))
+               || joinedChatId.matches('^dm-.*')
+             )
           && isValidId(joinedChatId)
           && incoming().chatId == joinedChatId
           && incoming().isGroup is bool
@@ -123,7 +127,14 @@ service cloudfirestore {
           && (
                isMemberOfChat(chatId) 
                || request.auth.uid == memberId 
-               || get(/databases/$(database)/documents/chats/$(chatId)).data.hostId == request.auth.uid
+               || (
+                    exists(/databases/$(database)/documents/chats/$(chatId))
+                    && get(/databases/$(database)/documents/chats/$(chatId)).data.hostId == request.auth.uid
+                  )
+               || (
+                    existsAfter(/databases/$(database)/documents/chats/$(chatId))
+                    && getAfter(/databases/$(database)/documents/chats/$(chatId)).data.hostId == request.auth.uid
+                  )
              )
           && incoming().userId == memberId
           && incoming().displayName is string && incoming().displayName.size() <= 100
@@ -194,6 +205,11 @@ service cloudfirestore {
     match /announcements/{announcementId} {
       allow read: if isSignedIn();
       allow write: if isAdmin();
+    }
+
+    // Default Deny Catch-All placed safely at the bottom
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

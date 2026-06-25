@@ -787,7 +787,7 @@ export default function ActiveChatWindow({
                         ) : (
                           <img 
                             src={member.photoURL} 
-                            referrerPolicy="no-referrer;same-origin"
+                            referrerPolicy="no-referrer"
                             className="h-7 w-7 rounded-full object-cover border border-[#E8E1D5] bg-white" 
                             alt={member.displayName} 
                           />
